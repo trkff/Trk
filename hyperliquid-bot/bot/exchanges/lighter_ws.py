@@ -47,3 +47,60 @@ def _next_boundary_ms(now_ms: int, interval: str) -> int:
     """
     tf_ms = _INTERVAL_MS[interval]
     return ((now_ms // tf_ms) + 1) * tf_ms
+
+
+import pandas as pd
+
+
+def _candle_payload_to_row(c: dict) -> dict:
+    """Convert Lighter candle dict (t/o/h/l/c/v) to internal row format."""
+    return {
+        "timestamp": int(c["t"]),
+        "open":      float(c["o"]),
+        "high":      float(c["h"]),
+        "low":       float(c["l"]),
+        "close":     float(c["c"]),
+        "volume":    float(c["v"]),
+    }
+
+
+def _apply_candle_update(
+    buffer: pd.DataFrame,
+    candle: dict,
+) -> tuple[pd.DataFrame, bool]:
+    """Merge an incoming Lighter candle into the buffer.
+
+    Returns (new_buffer, emitted_close_event):
+    - `emitted_close_event = True` when the incoming `t` is greater than the
+      last `t` in the buffer (a new candle started, so the previous one closed).
+    - `False` for the very first candle (nothing to close yet), for same-t
+      updates (in-place OHLC refresh), and for out-of-order updates (ignored).
+    """
+    row = _candle_payload_to_row(candle)
+    if buffer.empty:
+        new_buf = pd.DataFrame([row])
+        new_buf["datetime"] = pd.to_datetime(new_buf["timestamp"], unit="ms", utc=True)
+        new_buf.set_index("datetime", inplace=True)
+        return new_buf, False
+
+    last_t = int(buffer.iloc[-1]["timestamp"])
+    incoming_t = row["timestamp"]
+
+    if incoming_t < last_t:
+        # out-of-order: ignora
+        return buffer, False
+
+    if incoming_t == last_t:
+        # mesma vela em formação: substitui OHLCV in-place
+        new_buf = buffer.copy()
+        for col in ("open", "high", "low", "close", "volume"):
+            new_buf.iloc[-1, new_buf.columns.get_loc(col)] = row[col]
+        return new_buf, False
+
+    # incoming_t > last_t: nova vela → anterior fechou
+    new_row = pd.DataFrame([row])
+    new_row["datetime"] = pd.to_datetime(new_row["timestamp"], unit="ms", utc=True)
+    new_row.set_index("datetime", inplace=True)
+    new_buf = pd.concat([buffer, new_row])
+    new_buf = new_buf[~new_buf.index.duplicated(keep="last")].sort_index()
+    return new_buf, True

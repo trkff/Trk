@@ -40,3 +40,44 @@ class TestNextBoundary:
     def test_unknown_interval_raises(self):
         with pytest.raises(KeyError):
             _next_boundary_ms(0, "7s")
+
+
+import pandas as pd
+
+from bot.exchanges.lighter_ws import _apply_candle_update
+
+
+def _row(t, o=1.0, h=1.0, low=1.0, c=1.0, v=0.0):
+    return {"t": t, "o": o, "h": h, "l": low, "c": c, "v": v}
+
+
+class TestApplyCandleUpdate:
+    def test_empty_buffer_first_update(self):
+        df, emitted = _apply_candle_update(pd.DataFrame(), _row(1700000000000))
+        assert len(df) == 1
+        assert df.iloc[-1]["timestamp"] == 1700000000000
+        assert emitted is False  # primeira vela não emite evento (não há "anterior")
+
+    def test_same_t_updates_in_place(self):
+        df = pd.DataFrame()
+        df, _ = _apply_candle_update(df, _row(1700000000000, c=1.0))
+        df, emitted = _apply_candle_update(df, _row(1700000000000, c=2.5))
+        assert len(df) == 1  # ainda 1 linha
+        assert df.iloc[-1]["close"] == 2.5  # close atualizado
+        assert emitted is False
+
+    def test_new_t_emits_close_event(self):
+        df = pd.DataFrame()
+        df, _ = _apply_candle_update(df, _row(1700000000000))
+        df, emitted = _apply_candle_update(df, _row(1700000300000))  # +5m
+        assert len(df) == 2
+        assert emitted is True  # anterior fechou
+
+    def test_out_of_order_update_ignored(self):
+        # Lighter pode reordenar em casos raros — t < último não deve corromper
+        df = pd.DataFrame()
+        df, _ = _apply_candle_update(df, _row(1700000300000))
+        df, emitted = _apply_candle_update(df, _row(1700000000000))
+        assert len(df) == 1
+        assert df.iloc[-1]["timestamp"] == 1700000300000
+        assert emitted is False
