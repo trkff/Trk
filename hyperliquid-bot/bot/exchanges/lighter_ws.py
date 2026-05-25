@@ -131,6 +131,9 @@ class LighterCandleManager:
     - _worker_thread:    drains queue and dispatches to thread pool
     - _watchdog_thread:  monitors global silence, reconnects
     - _boundary_thread:  fires per-TF boundary REST fallback for silent channels
+    - _ping_thread:      sends JSON `{"type":"ping"}` every 60s (Lighter requires
+                         client-initiated app-level keepalive; WebSocket PING
+                         control frames are silently ignored)
 
     Callback signature: on_candle_close(asset: str, interval: str) -> None
     """
@@ -167,6 +170,7 @@ class LighterCandleManager:
         self._worker_thread: threading.Thread | None = None
         self._watchdog_thread: threading.Thread | None = None
         self._boundary_thread: threading.Thread | None = None
+        self._ping_thread: threading.Thread | None = None
         self._executor = ThreadPoolExecutor(max_workers=16, thread_name_prefix="lighter-asset-worker")
 
     @property
@@ -206,11 +210,13 @@ class LighterCandleManager:
         self._worker_thread = threading.Thread(target=self._worker_loop, daemon=True, name="lighter-worker")
         self._watchdog_thread = threading.Thread(target=self._watchdog_loop, daemon=True, name="lighter-watchdog")
         self._boundary_thread = threading.Thread(target=self._boundary_loop, daemon=True, name="lighter-boundary")
+        self._ping_thread = threading.Thread(target=self._ping_loop, daemon=True, name="lighter-ping")
 
         self._ws_thread.start()
         self._worker_thread.start()
         self._watchdog_thread.start()
         self._boundary_thread.start()
+        self._ping_thread.start()
         log.info("LighterCandleManager: started.")
 
     def update_assets(self, new_assets: list[str]) -> None:
@@ -455,6 +461,24 @@ class LighterCandleManager:
             if elapsed > 90:
                 log.warning(f"Lighter WS silent for {elapsed:.0f}s — reconnect")
                 self._reconnect()
+
+    def _ping_loop(self) -> None:
+        """Send application-level JSON ping every 60s.
+
+        Lighter REQUIRES the client to send a frame within every 2-min window
+        or it closes the connection (code=1000). WebSocket control PING frames
+        from websocket-client's ping_interval are NOT honored — we must send
+        `{"type":"ping"}` JSON ourselves.
+        """
+        while not self._stop_event.is_set():
+            if self._stop_event.wait(60):
+                break
+            if self._ws is None:
+                continue
+            try:
+                self._ws.send(json.dumps({"type": "ping"}))
+            except Exception as e:
+                log.warning(f"Lighter WS ping send failed: {e}")
 
     def _boundary_loop(self) -> None:
         """For each interval, sleep until next boundary + margin, then check fallback."""
