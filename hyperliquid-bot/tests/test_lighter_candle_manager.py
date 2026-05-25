@@ -1,3 +1,4 @@
+import threading
 import pytest
 
 from bot.exchanges.lighter_ws import _parse_channel, _next_boundary_ms, _INTERVAL_MS
@@ -87,10 +88,12 @@ from bot.exchanges.lighter_ws import LighterCandleManager
 
 
 def _mk_client():
-    """Mock LighterExchangeClient com get_candles e _client.get_market."""
+    """Mock LighterExchangeClient com get_candles, _client.get_market, e buffer compartilhado."""
     client = MagicMock()
     client._client.get_market.side_effect = lambda a: {"marketId": {"BTC": 0, "ETH": 1}.get(a)}
     client.get_candles.return_value = pd.DataFrame()
+    client._candle_buffer = {}
+    client._candle_buffer_lock = threading.RLock()
     return client
 
 
@@ -166,8 +169,8 @@ class TestOnMessage:
         mgr._on_message(None, _msg("candle:0:5m", [_row(1700000000000)], msg_type="subscribed/candle"))
         assert mgr._queue.qsize() == 0
         # Mas o buffer deve estar populado
-        assert ("BTC", "5m") in mgr._buffer
-        assert len(mgr._buffer[("BTC", "5m")]) == 1
+        assert ("BTC", "5m") in mgr._client._candle_buffer
+        assert len(mgr._client._candle_buffer[("BTC", "5m")]) == 1
 
     def test_unknown_channel_ignored(self):
         cb = MagicMock()
@@ -220,7 +223,7 @@ class TestStart:
             # subscribes registrados
             assert ("BTC", "5m") in mgr._subscriptions
             # buffer seedado (sample_df foi consumido)
-            assert ("BTC", "5m") in mgr._buffer
+            assert ("BTC", "5m") in client._candle_buffer
             # threads vivas
             assert mgr._ws_thread is not None and mgr._ws_thread.is_alive()
             assert mgr._worker_thread is not None and mgr._worker_thread.is_alive()
@@ -228,3 +231,43 @@ class TestStart:
             assert mgr._boundary_thread is not None and mgr._boundary_thread.is_alive()
         finally:
             mgr.stop()
+
+
+class TestSharedBuffer:
+    def test_on_message_writes_to_client_buffer(self):
+        client = _mk_client()
+        # client._candle_buffer e _candle_buffer_lock devem existir no mock
+        client._candle_buffer = {}
+        client._candle_buffer_lock = threading.RLock()
+
+        mgr = LighterCandleManager(
+            client=client,
+            assets=["BTC"],
+            intervals=["5m"],
+            on_candle_close=MagicMock(),
+        )
+        mgr._subscriptions = {("BTC", "5m"): 0}
+
+        mgr._on_message(None, _msg("candle:0:5m", [_row(1700000000000, c=1.5)]))
+
+        key = ("BTC", "5m")
+        assert key in client._candle_buffer
+        assert client._candle_buffer[key].iloc[-1]["close"] == 1.5
+
+    def test_get_candles_reads_from_client_buffer(self):
+        client = _mk_client()
+        client._candle_buffer = {}
+        client._candle_buffer_lock = threading.RLock()
+
+        mgr = LighterCandleManager(
+            client=client,
+            assets=["BTC"],
+            intervals=["5m"],
+            on_candle_close=MagicMock(),
+        )
+        mgr._subscriptions = {("BTC", "5m"): 0}
+        mgr._on_message(None, _msg("candle:0:5m", [_row(1700000000000)]))
+        mgr._on_message(None, _msg("candle:0:5m", [_row(1700000300000)]))
+
+        df = mgr.get_candles("BTC", "5m", count=10)
+        assert len(df) == 2

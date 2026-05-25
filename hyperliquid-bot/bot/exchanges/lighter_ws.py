@@ -148,8 +148,7 @@ class LighterCandleManager:
         self._intervals: list[str] = list(intervals) if intervals else ["5m"]
         self._ws_url = ws_url
 
-        self._buffer: dict[tuple[str, str], pd.DataFrame] = {}
-        self._lock = threading.RLock()
+        # buffer is owned by self._client (LighterExchangeClient._candle_buffer)
 
         self._queue: queue.Queue = queue.Queue(maxsize=_QUEUE_MAXSIZE)
         self._paused = False
@@ -218,8 +217,20 @@ class LighterCandleManager:
         raise NotImplementedError("Wired in Task 8")
 
     def get_candles(self, asset: str, interval: str, count: int = 100) -> pd.DataFrame:
-        """Read last `count` candles from buffer. Wired in Task 6."""
-        raise NotImplementedError("Wired in Task 6")
+        """Read last `count` candles from the shared client buffer."""
+        key = (asset.upper(), interval)
+        df = self._get_buffer(key)
+        if df.empty:
+            return df
+        return df.iloc[-count:].copy()
+
+    def _get_buffer(self, key: tuple[str, str]) -> pd.DataFrame:
+        with self._client._candle_buffer_lock:
+            return self._client._candle_buffer.get(key, pd.DataFrame())
+
+    def _set_buffer(self, key: tuple[str, str], df: pd.DataFrame) -> None:
+        with self._client._candle_buffer_lock:
+            self._client._candle_buffer[key] = df
 
     def _market_to_asset(self, market_id: int, interval: str) -> str | None:
         """Reverse lookup market_id → asset via _subscriptions map."""
@@ -263,10 +274,9 @@ class LighterCandleManager:
         candles_to_apply = candles if is_snapshot else [candles[-1]]
 
         for c in candles_to_apply:
-            with self._lock:
-                buf = self._buffer.get(key, pd.DataFrame())
-                new_buf, emitted_close = _apply_candle_update(buf, c)
-                self._buffer[key] = new_buf
+            buf = self._get_buffer(key)
+            new_buf, emitted_close = _apply_candle_update(buf, c)
+            self._set_buffer(key, new_buf)
 
             self._last_update_ms[key] = int(c["t"])
 
@@ -311,8 +321,7 @@ class LighterCandleManager:
                 try:
                     df = self._client.get_candles(asset, tf, count=_SEED_COUNT)
                     if df is not None and not df.empty:
-                        with self._lock:
-                            self._buffer[(asset, tf)] = df.copy()
+                        self._set_buffer((asset, tf), df.copy())
                         last_ts = int(df.iloc[-1]["timestamp"]) if "timestamp" in df.columns else 0
                         self._last_update_ms[(asset, tf)] = last_ts
                 except Exception as e:
