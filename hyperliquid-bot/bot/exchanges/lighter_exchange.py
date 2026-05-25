@@ -69,6 +69,8 @@ LIGHTER_TAKER_FEE_RATE = 0.0  # Lighter has zero trading fees
 # Candle buffer settings
 _CANDLE_BUFFER_MAX = 600   # max rows kept per (asset, interval) in the rolling buffer
 _CANDLE_WARM_FETCH = 3     # candles fetched on incremental (warm) updates
+_CANDLE_WS_FRESH_S = 60    # serve get_candles direct from buffer (no REST) when
+                            # the WS manager wrote to this (asset, tf) in the last N seconds
 
 # Interval → ms (used to drop the currently-open candle from Lighter REST responses).
 # A Lighter REST `/api/v1/candles` devolve a vela ainda em formação como última linha,
@@ -130,6 +132,10 @@ class LighterExchangeClient(BaseExchangeClient):
         self._loop_thread: threading.Thread | None = None
         self._candle_buffer: dict[tuple[str, str], pd.DataFrame] = {}
         self._candle_buffer_lock = threading.Lock()
+        # Wall-clock timestamp (float, time.time()) when LighterCandleManager last
+        # wrote to a (asset, tf) buffer via WS. get_candles uses this to decide
+        # whether to serve directly from buffer (WS-fresh) or fall through to REST.
+        self._candle_buffer_fresh_ts: dict[tuple[str, str], float] = {}
 
     @property
     def address(self) -> str:
@@ -242,6 +248,19 @@ class LighterExchangeClient(BaseExchangeClient):
 
         with self._candle_buffer_lock:
             cached = self._candle_buffer.get(key, pd.DataFrame())
+
+        # Fast path: WS manager wrote to this buffer recently. Skip REST entirely,
+        # serve from buffer (still apply _drop_open_candle since WS includes the
+        # still-forming candle). This eliminates 1.5s × N_tf REST calls per asset
+        # on every candle close, which dominated the per-asset latency.
+        fresh_ts = self._candle_buffer_fresh_ts.get(key, 0.0)
+        if (
+            not cached.empty
+            and len(cached) >= count
+            and time.time() - fresh_ts < _CANDLE_WS_FRESH_S
+        ):
+            served = _drop_open_candle(cached, interval)
+            return served.iloc[-count:].copy()
 
         is_warm = not cached.empty and len(cached) >= count
         fetch_count = _CANDLE_WARM_FETCH if is_warm else count

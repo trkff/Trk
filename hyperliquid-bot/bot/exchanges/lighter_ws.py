@@ -120,7 +120,9 @@ log = get_logger(__name__)
 
 _QUEUE_MAXSIZE = 50
 _SEED_COUNT = 500
-_BOUNDARY_MARGIN_MS = 2000   # wait 2s past boundary so WS has priority before REST fallback fires
+_BOUNDARY_MARGIN_MS = 5000   # wait 5s past boundary so WS has priority before REST fallback fires
+                              # (2s was too short for low-volume assets whose first trade in the
+                              # new candle takes 3-5s to arrive)
 
 
 class LighterCandleManager:
@@ -278,6 +280,11 @@ class LighterCandleManager:
     def _set_buffer(self, key: tuple[str, str], df: pd.DataFrame) -> None:
         with self._client._candle_buffer_lock:
             self._client._candle_buffer[key] = df
+        # Mark this buffer as WS-fresh so LighterExchangeClient.get_candles can
+        # skip the REST roundtrip on next read.
+        fresh_ts_map = getattr(self._client, "_candle_buffer_fresh_ts", None)
+        if fresh_ts_map is not None:
+            fresh_ts_map[key] = time.time()
 
     def _market_to_asset(self, market_id: int, interval: str) -> str | None:
         """Reverse lookup market_id → asset via _subscriptions map."""
