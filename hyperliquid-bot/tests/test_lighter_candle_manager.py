@@ -322,3 +322,41 @@ class TestBoundaryFallback:
 
         client.get_candles.assert_not_called()
         assert mgr._queue.qsize() == 0
+
+
+class TestUpdateAssets:
+    def test_add_new_asset_registers_subscription(self):
+        client = _mk_client()
+        mgr = LighterCandleManager(
+            client=client,
+            assets=["BTC"],
+            intervals=["5m"],
+            on_candle_close=MagicMock(),
+        )
+        # Simula estado pós-start parcial: BTC já subscrito
+        mgr._subscriptions = {("BTC", "5m"): 0}
+        mgr._ws = MagicMock()
+
+        mgr.update_assets(["BTC", "ETH"])
+
+        assert ("ETH", "5m") in mgr._subscriptions
+        # ws.send foi chamado com subscribe de ETH
+        sent = [json.loads(call.args[0]) for call in mgr._ws.send.call_args_list]
+        assert any(s.get("channel") == "candle/1/5m" for s in sent)
+
+    def test_remove_asset_unsubscribes(self):
+        client = _mk_client()
+        mgr = LighterCandleManager(
+            client=client,
+            assets=["BTC", "ETH"],
+            intervals=["5m"],
+            on_candle_close=MagicMock(),
+        )
+        mgr._subscriptions = {("BTC", "5m"): 0, ("ETH", "5m"): 1}
+        mgr._ws = MagicMock()
+
+        mgr.update_assets(["BTC"])
+
+        assert ("ETH", "5m") not in mgr._subscriptions
+        sent = [json.loads(call.args[0]) for call in mgr._ws.send.call_args_list]
+        assert any(s.get("type") == "unsubscribe" and s.get("channel") == "candle/1/5m" for s in sent)

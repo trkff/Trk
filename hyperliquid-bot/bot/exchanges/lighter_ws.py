@@ -214,8 +214,48 @@ class LighterCandleManager:
         log.info("LighterCandleManager: started.")
 
     def update_assets(self, new_assets: list[str]) -> None:
-        """Wired in Task 8."""
-        raise NotImplementedError("Wired in Task 8")
+        """Diff against current subscriptions, send subscribe/unsubscribe accordingly."""
+        new_set = set(a.upper() for a in new_assets)
+        current_assets = set(a for (a, _) in self._subscriptions.keys())
+
+        # Remove assets no longer wanted
+        for asset in current_assets - new_set:
+            for tf in self._intervals:
+                key = (asset, tf)
+                if key not in self._subscriptions:
+                    continue
+                market_id = self._subscriptions.pop(key)
+                if self._ws:
+                    msg = {"type": "unsubscribe", "channel": f"candle/{market_id}/{tf}"}
+                    try:
+                        self._ws.send(json.dumps(msg))
+                    except Exception as e:
+                        log.warning(f"[{asset}] unsubscribe {tf} failed: {e}")
+
+        # Add new assets
+        for asset in new_set - current_assets:
+            market_id = self._resolve_market_id(asset)
+            if market_id is None:
+                log.warning(f"[{asset}] no Lighter market — cannot subscribe")
+                continue
+            for tf in self._intervals:
+                self._subscriptions[(asset, tf)] = market_id
+                # Seed via REST so o buffer fica disponível antes do primeiro update
+                try:
+                    df = self._client.get_candles(asset, tf, count=_SEED_COUNT)
+                    if df is not None and not df.empty:
+                        self._set_buffer((asset, tf), df.copy())
+                        self._last_update_ms[(asset, tf)] = int(df.iloc[-1]["timestamp"])
+                except Exception as e:
+                    log.warning(f"[{asset}] seed on update_assets failed: {e}")
+                if self._ws:
+                    msg = {"type": "subscribe", "channel": f"candle/{market_id}/{tf}"}
+                    try:
+                        self._ws.send(json.dumps(msg))
+                    except Exception as e:
+                        log.warning(f"[{asset}] subscribe {tf} failed: {e}")
+
+        self._assets = list(new_assets)
 
     def get_candles(self, asset: str, interval: str, count: int = 100) -> pd.DataFrame:
         """Read last `count` candles from the shared client buffer."""

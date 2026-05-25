@@ -248,9 +248,8 @@ class LighterExchangeClient(BaseExchangeClient):
 
         market = self._client.get_market(asset)
         if not market:
-            log.warning(f"[{asset}] Market not found on Lighter, falling back to Binance candles")
-            from bot.exchanges.base import fetch_binance_candles
-            return fetch_binance_candles(asset, interval, count)
+            log.warning(f"[{asset}] Market not found on Lighter, returning empty df")
+            return pd.DataFrame()
         try:
             raw = self._client.get_candles(market["marketId"], interval, fetch_count)
             if not raw:
@@ -291,9 +290,8 @@ class LighterExchangeClient(BaseExchangeClient):
 
             return merged.iloc[-count:].copy()
         except Exception as e:
-            log.warning(f"[{asset}] Lighter candles ({interval}) failed, falling back to Binance: {e}")
-            from bot.exchanges.base import fetch_binance_candles
-            return fetch_binance_candles(asset, interval, count)
+            log.warning(f"[{asset}] Lighter candles ({interval}) failed: {e}")
+            return pd.DataFrame()
 
     # ── Funding rate ─────────────────────────────────────────────────
 
