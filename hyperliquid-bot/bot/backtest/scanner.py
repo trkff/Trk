@@ -273,6 +273,19 @@ def _apply_ema_filter(sig_long, sig_short, close, ema_cache, trend_e):
             sig_short & valid & (close < EMA))
 
 
+def _scale_tp_sl(tps: list[float], sls: list[float], mins: int) -> tuple[list[float], list[float]]:
+    """Escala TP/SL pela volatilidade do TF — sqrt(mins/5) replica o scaling random-walk
+    da volatilidade com tempo. 5m mantém base; 15m ~1.73×; 30m ~2.45×; 1h ~3.46×.
+    Sem isso, scans em TFs maiores usariam TP/SL muito apertados (dentro do range de
+    1 vela) e inflariam artificialmente a WR.
+    """
+    if mins <= 5:
+        return list(tps), list(sls)
+    scale = (mins / 5.0) ** 0.5
+    return ([round(t * scale, 2) for t in tps],
+            [round(s * scale, 2) for s in sls])
+
+
 # ── Strategy scanners ──────────────────────────────────────────────────────
 
 def _scan_bb_stoch(close, high, low, n, close_s, high_s, low_s, cb, *, window_start_idx: int = 0, mins: int = 5):
@@ -284,6 +297,7 @@ def _scan_bb_stoch(close, high, low, n, close_s, high_s, low_s, cb, *, window_st
     TREND_EMAS  = [0, 50, 200]
     TPS         = [0.5, 0.8, 1.0, 1.5]
     SLS         = [0.5, 0.8, 1.0]
+    TPS, SLS = _scale_tp_sl(TPS, SLS, mins)
     BB_MID_EXITS = [False, True]
 
     bb  = _bb_cache(close_s, close, BB_PERIODS, BB_STDS)
@@ -323,6 +337,7 @@ def _scan_stoch_scalp(close, high, low, n, close_s, high_s, low_s, cb, *, window
     TREND_EMAS = [0, 50, 200]
     TPS        = [0.5, 0.8, 1.0]
     SLS        = [0.5, 0.8, 1.0]
+    TPS, SLS = _scale_tp_sl(TPS, SLS, mins)
 
     stoch = _stoch_cache(high_s, low_s, close_s, K_PERIODS)
     ema   = _ema_cache(close_s, [e for e in TREND_EMAS if e > 0])
@@ -357,6 +372,7 @@ def _scan_ema_cross(close, high, low, n, close_s, high_s, low_s, cb, *, window_s
     TREND_EMAS = [0, 50, 200]
     TPS        = [0.5, 1.0, 1.5]
     SLS        = [0.3, 0.5, 0.8]
+    TPS, SLS = _scale_tp_sl(TPS, SLS, mins)
 
     all_periods = {p for pair in PAIRS for p in pair} | {e for e in TREND_EMAS if e > 0}
     ema = _ema_cache(close_s, list(all_periods))
@@ -392,6 +408,7 @@ def _scan_bb_reversion(close, high, low, n, close_s, high_s, low_s, cb, *, windo
     TREND_EMAS = [0, 50, 200]
     TPS        = [0.5, 1.0, 1.5, 2.0]
     SLS        = [0.5, 0.8, 1.0]
+    TPS, SLS = _scale_tp_sl(TPS, SLS, mins)
     BB_MID_EXITS = [False, True]
 
     bb  = _bb_cache(close_s, close, BB_PERIODS, BB_STDS)
@@ -446,6 +463,7 @@ def _scan_rsi_scalp(close, high, low, n, close_s, high_s, low_s, cb, *, window_s
     TREND_EMAS  = [0, 50, 200]
     TPS         = [0.5, 0.8, 1.0]
     SLS         = [0.5, 0.8, 1.0]
+    TPS, SLS = _scale_tp_sl(TPS, SLS, mins)
 
     rsi = _rsi_cache(close_s, RSI_PERIODS)
     ema = _ema_cache(close_s, [e for e in TREND_EMAS if e > 0])
@@ -483,6 +501,7 @@ def _scan_bb_rsi(close, high, low, n, close_s, high_s, low_s, cb, *, window_star
     TREND_EMAS  = [0, 50, 200]
     TPS         = [0.8, 1.5]
     SLS         = [0.5, 0.8]
+    TPS, SLS = _scale_tp_sl(TPS, SLS, mins)
     BB_MID_EXITS = [False, True]
 
     bb  = _bb_cache(close_s, close, BB_PERIODS, BB_STDS)
@@ -522,6 +541,7 @@ def _scan_macd_cross(close, high, low, n, close_s, high_s, low_s, cb, *, window_
     TREND_EMAS  = [0, 50, 200]
     TPS         = [0.5, 1.0, 1.5]
     SLS         = [0.3, 0.5, 0.8]
+    TPS, SLS = _scale_tp_sl(TPS, SLS, mins)
 
     macd_cache = {}
     for fast, slow, sig in MACD_COMBOS:
@@ -565,6 +585,7 @@ def _scan_williams_r(close, high, low, n, close_s, high_s, low_s, cb, *, window_
     TREND_EMAS = [0, 50, 200]
     TPS        = [0.5, 0.8, 1.0]
     SLS        = [0.5, 0.8, 1.0]
+    TPS, SLS = _scale_tp_sl(TPS, SLS, mins)
 
     wr_cache = {wp: ta.willr(high_s, low_s, close_s, length=wp).values.astype(float)
                 for wp in WR_PERIODS}

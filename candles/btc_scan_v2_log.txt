@@ -1,0 +1,5 @@
+Starting BB Stoch BTC Scan v2 (fast vectorized)
+Candles: 52087, Periodo: 180.9 dias
+Unique indicator sets: 108
+Inner sig combos: 16, inner trade combos: 32
+Total: 55296

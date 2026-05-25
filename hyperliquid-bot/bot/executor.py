@@ -5,6 +5,7 @@ Order execution module.
 - Position closing
 """
 
+import threading
 import time as _time
 from datetime import datetime, timezone
 
@@ -13,6 +14,23 @@ from bot import db
 from bot.exchanges.base import BaseExchangeClient
 
 log = get_logger("executor")
+
+# Per-asset locks: serialize open_position calls for the same asset so that
+# concurrent workers (e.g., WS push + boundary fallback firing the same
+# 5m close) can't both pass the "no open position" check and both insert
+# a trade — the duplicate-trade bug. Within the lock we re-check the DB
+# for an open trade in this asset and abort if one was just inserted.
+_open_locks: dict[str, threading.Lock] = {}
+_open_locks_guard = threading.Lock()
+
+
+def _get_asset_lock(asset: str) -> threading.Lock:
+    with _open_locks_guard:
+        lock = _open_locks.get(asset)
+        if lock is None:
+            lock = threading.Lock()
+            _open_locks[asset] = lock
+        return lock
 
 
 def _get_fill_data(client: BaseExchangeClient, asset: str, oid: str, since_ms: int) -> dict:
@@ -56,6 +74,12 @@ def open_position(client: BaseExchangeClient, signal: dict, size_usd: float, cfg
     Execute a market order for the given signal.
     Places TP and SL as trigger orders.
     Returns trade_id or None on failure.
+
+    Serialized per asset via _open_locks so that concurrent workers triggered
+    by the same candle close (WS push + boundary fallback, or queue dedup
+    race) cannot both pass the "no open position" gate. Inside the lock we
+    re-check db.get_open_trades() — if another worker already inserted a
+    trade for this asset, abort without placing a second order.
     """
     asset = signal["asset"]
     side = signal["side"]
@@ -66,7 +90,17 @@ def open_position(client: BaseExchangeClient, signal: dict, size_usd: float, cfg
     sl_mult = float(signal.get("sl_atr_multiplier") or cfg.get("sl_atr_multiplier", 1.0))
     slippage = float(cfg.get("slippage", 0.005))
 
+    lock = _get_asset_lock(asset)
+    if not lock.acquire(blocking=False):
+        log.warning(f"[{asset}] open_position already in progress on another thread — skipping duplicate")
+        return None
+
     try:
+        # Re-check inside the lock — another worker may have just inserted a trade for this asset.
+        if any(t["asset"] == asset for t in db.get_open_trades()):
+            log.warning(f"[{asset}] open_position aborted — open trade already exists for this asset")
+            return None
+
         sz_decimals = client.get_asset_sz_decimals(asset)
         mid_price = client.get_mid_price(asset)
         if mid_price <= 0:
@@ -212,6 +246,8 @@ def open_position(client: BaseExchangeClient, signal: dict, size_usd: float, cfg
     except Exception as e:
         log.error(f"[{asset}] Failed to execute {side}: {e}", exc_info=True)
         return None
+    finally:
+        lock.release()
 
 
 def _get_close_pnl_fallback(client: BaseExchangeClient, asset: str, since_ms: int) -> dict:

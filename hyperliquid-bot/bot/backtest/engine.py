@@ -212,13 +212,17 @@ def _run_backtest(strategy_name, asset, days, trade_size_usd, fee_rate, progress
 
     params = {**strategy.DEFAULT_PARAMS, **bot_db.get_strategy_config(strategy_name)["params"]}
 
-    if progress_cb: progress_cb("Atualizando CSV...")
-    _update_csv(asset, progress_cb)
+    # TF vem dos params da instância (scanner aplicou via timeframe="1h" etc).
+    # Fallback "5m" para instâncias hardcoded legadas sem o campo.
+    tf = str(params.get("timeframe", "5m"))
 
-    if progress_cb: progress_cb("Carregando candles...")
-    df = _load_candles_csv(asset, "5m", days=None)
+    if progress_cb: progress_cb(f"Atualizando CSV {tf}...")
+    _update_csv(asset, progress_cb, interval=tf)
+
+    if progress_cb: progress_cb(f"Carregando candles {tf}...")
+    df = _load_candles_csv(asset, tf, days=None)
     if df.empty:
-        raise ValueError(f"No 5m candles available for {asset}")
+        raise ValueError(f"No {tf} candles available for {asset}")
 
     close = df["close"].values.astype(float)
     high  = df["high"].values.astype(float)

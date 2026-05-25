@@ -40,9 +40,21 @@
     <button class="filter-btn" data-days="7">7 dias</button>
     <button class="filter-btn" data-days="30">30 dias</button>
   </div>
-  <label style="display:flex;align-items:center;gap:6px;margin-left:auto;font-size:0.9em;cursor:pointer;">
-    <input type="checkbox" id="hide-inactive-toggle"> Ocultar inativas
-  </label>
+  <div style="display:flex;align-items:center;gap:6px;margin-left:auto;">
+    <label style="font-size:0.78rem;color:#94A3B8;">Ordenar:</label>
+    <select id="strategy-sort" style="background:#0F1923;border:1px solid #1E3A5F;color:#E2E8F0;padding:4px 8px;border-radius:6px;font-family:'JetBrains Mono',monospace;font-size:0.8rem;">
+      <option value="pnl_desc">PnL ↓</option>
+      <option value="pnl_asc">PnL ↑</option>
+      <option value="trades_desc">Trades ↓</option>
+      <option value="trades_asc">Trades ↑</option>
+      <option value="wr_desc">Win Rate ↓</option>
+      <option value="wr_asc">Win Rate ↑</option>
+      <option value="name_asc">Nome A→Z</option>
+    </select>
+    <label style="display:flex;align-items:center;gap:6px;font-size:0.9em;cursor:pointer;margin-left:8px;">
+      <input type="checkbox" id="hide-inactive-toggle"> Ocultar inativas
+    </label>
+  </div>
 </div>
 
 <h3 class="chart-title" style="margin:0 0 8px;font-size:1em;opacity:0.85;">Ativas <span id="active-count" style="opacity:0.6;font-weight:normal;"></span></h3>
@@ -214,6 +226,9 @@ function renderCombined() {
     });
   }
 
+  sortItems(active);
+  sortItems(inactive);
+
   const activeGrid = document.getElementById('strategy-stats-active');
   const inactiveGrid = document.getElementById('strategy-stats-inactive');
 
@@ -227,6 +242,24 @@ function renderCombined() {
 
   document.getElementById('active-count').textContent = active.length ? `(${active.length})` : '';
   document.getElementById('inactive-count').textContent = inactive.length ? `(${inactive.length})` : '';
+}
+
+function sortItems(items) {
+  const mode = document.getElementById('strategy-sort').value;
+  const pnl = i => i.stats?.pnl ?? 0;
+  const trades = i => i.stats?.closed_total ?? 0;
+  const wr = i => i.stats?.win_rate ?? 0;
+  const name = i => (i.name || '').toLowerCase();
+  const cmp = {
+    pnl_desc:    (a, b) => pnl(b) - pnl(a),
+    pnl_asc:     (a, b) => pnl(a) - pnl(b),
+    trades_desc: (a, b) => trades(b) - trades(a),
+    trades_asc:  (a, b) => trades(a) - trades(b),
+    wr_desc:     (a, b) => wr(b) - wr(a),
+    wr_asc:      (a, b) => wr(a) - wr(b),
+    name_asc:    (a, b) => name(a).localeCompare(name(b)),
+  }[mode] || ((a, b) => pnl(b) - pnl(a));
+  items.sort(cmp);
 }
 
 async function loadAppliedStrategies() {
@@ -320,6 +353,16 @@ try {
 } catch (e) {}
 applyHideInactive();
 document.getElementById('hide-inactive-toggle').addEventListener('change', applyHideInactive);
+
+// Sort selector (persisted)
+try {
+  const savedSort = localStorage.getItem('strategySort');
+  if (savedSort) document.getElementById('strategy-sort').value = savedSort;
+} catch (e) {}
+document.getElementById('strategy-sort').addEventListener('change', e => {
+  try { localStorage.setItem('strategySort', e.target.value); } catch (_) {}
+  renderCombined();
+});
 
 // Initial load
 loadOverview();

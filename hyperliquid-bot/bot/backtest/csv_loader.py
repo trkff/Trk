@@ -63,12 +63,21 @@ def _load_candles_csv(asset: str, interval: str, days: int | None = None, extra_
     """
     _EMPTY = pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
 
+    # Preferir CSV nativo do TF pedido (ex: pump_1h.csv) — só faz resample se o
+    # nativo não existir e tivermos o 5m disponível.
+    native_path = _CANDLES_DIR / f"{asset.lower()}_{interval}.csv"
     csv_path = _CANDLES_DIR / f"{asset.lower()}_5m.csv"
-    if not csv_path.exists():
-        log.warning(f"[backtest] CSV not found: {csv_path}")
+    use_native = interval != "5m" and native_path.exists()
+
+    if use_native:
+        active_path = native_path
+    elif csv_path.exists():
+        active_path = csv_path
+    else:
+        log.warning(f"[backtest] CSV not found: {native_path if interval != '5m' else csv_path}")
         return _EMPTY
 
-    df = pd.read_csv(csv_path)
+    df = pd.read_csv(active_path)
 
     if "ts" in df.columns and "timestamp" not in df.columns:
         df = df.rename(columns={"ts": "timestamp"})
@@ -95,10 +104,12 @@ def _load_candles_csv(asset: str, interval: str, days: int | None = None, extra_
             log.warning(f"[backtest] No data in range for {asset} ({csv_path.name})")
             return _EMPTY
 
-    if interval == "5m":
-        log.backtest(f"[backtest] Loaded {len(df)} 5m candles for {asset} from CSV")
+    # Se carregamos o CSV nativo do TF pedido OU se o TF é 5m → retorna direto.
+    if use_native or interval == "5m":
+        log.backtest(f"[backtest] Loaded {len(df)} {interval} candles for {asset} from {active_path.name}")
         return df
 
+    # Resample a partir do 5m (caminho legado para assets sem CSV nativo no TF).
     rule = _RESAMPLE_RULES.get(interval)
     if rule is None:
         log.warning(f"[backtest] Unsupported interval {interval}, returning 5m data")
@@ -400,33 +411,41 @@ def download_full_history(asset: str, interval: str = "5m", progress_cb=None) ->
     }
 
 
-def _update_csv(asset: str, progress_cb=None) -> None:
+def _update_csv(asset: str, progress_cb=None, interval: str = "5m") -> None:
     """
-    Check the local 5m CSV for asset and append any candles missing since the last row.
+    Check the local {interval} CSV for asset and append any candles missing since the last row.
     Writes back in epoch-ms integer format (normalizes datetime-string CSVs on first update).
+
+    Backtest e scanner agora podem rodar em TFs nativos (5m, 15m, 30m, 1h) usando
+    os CSVs baixados pela aba Ativos. `interval` precisa estar em `_INTERVAL_MS`.
     """
-    csv_path = _CANDLES_DIR / f"{asset.lower()}_5m.csv"
-    if not csv_path.exists():
-        log.backtest(f"[backtest] No CSV for {asset}, skipping update")
+    if interval not in _INTERVAL_MS:
+        log.warning(f"[backtest] _update_csv: invalid interval {interval}")
         return
 
-    existing = _load_candles_csv(asset, "5m", days=None)
+    csv_path = _CANDLES_DIR / f"{asset.lower()}_{interval}.csv"
+    if not csv_path.exists():
+        log.backtest(f"[backtest] No {interval} CSV for {asset}, skipping update")
+        return
+
+    existing = _load_candles_csv(asset, interval, days=None)
     if existing.empty:
         return
 
     last_ts = int(existing["timestamp"].iloc[-1])
     now_ms = int(time.time() * 1000)
+    ivms = _INTERVAL_MS[interval]
 
-    if now_ms - last_ts < _INTERVAL_MS["5m"]:
-        log.backtest(f"[backtest] {asset} CSV already up to date")
+    if now_ms - last_ts < ivms:
+        log.backtest(f"[backtest] {asset} {interval} CSV already up to date")
         return
 
-    missing_approx = (now_ms - last_ts) // _INTERVAL_MS["5m"]
+    missing_approx = (now_ms - last_ts) // ivms
     if progress_cb:
-        progress_cb(f"Buscando ~{missing_approx} candles novos de {asset} na Lighter...")
-    log.backtest(f"[backtest] {asset}: fetching ~{missing_approx} new 5m candles from Lighter (since {last_ts})")
+        progress_cb(f"Buscando ~{missing_approx} candles {interval} novos de {asset} na Lighter...")
+    log.backtest(f"[backtest] {asset}: fetching ~{missing_approx} new {interval} candles from Lighter (since {last_ts})")
 
-    new_df = _fetch_lighter_candles_since(asset, "5m", last_ts)
+    new_df = _fetch_lighter_candles_since(asset, interval, last_ts)
     if new_df.empty:
         log.backtest(f"[backtest] {asset}: no new candles returned from Lighter")
         return

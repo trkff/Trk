@@ -369,6 +369,32 @@ def set_configs(kvs: dict):
     conn.commit()
 
 
+# ── last candle timestamp persistence ─────────────────────────────────────
+# Persistem por TF/asset no config table com key `last_ts.<tf>.<asset>`.
+# Evita que restart do bot dispare falso `new_<tf>` na primeira detecção pós-restart
+# (problema: o dict em memória zera; primeira leitura faz `latest_ts > 0` sempre True).
+
+def get_last_candle_ts(tf: str) -> dict[str, int]:
+    """Carrega o dict {asset: last_ts_ms} para o timeframe dado."""
+    prefix = f"last_ts.{tf}."
+    rows = get_conn().execute(
+        "SELECT key, value FROM config WHERE key LIKE ?", (f"{prefix}%",)
+    ).fetchall()
+    out: dict[str, int] = {}
+    for r in rows:
+        asset = r["key"][len(prefix):]
+        try:
+            out[asset] = int(r["value"])
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def set_last_candle_ts(tf: str, asset: str, ts: int) -> None:
+    """Persiste o último ts conhecido para (tf, asset)."""
+    set_config(f"last_ts.{tf}.{asset}", str(int(ts)))
+
+
 def is_configured() -> bool:
     exchange = get_config("selected_exchange") or "hyperliquid"
     if exchange == "lighter":

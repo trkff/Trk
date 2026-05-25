@@ -1,0 +1,3 @@
+Total combos: 55296, Periodo: 180.9 dias
+CPUs: 2
+Chunks: 8 x ~6912

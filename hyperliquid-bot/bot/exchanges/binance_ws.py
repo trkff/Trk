@@ -200,9 +200,9 @@ class BinanceCandleManager:
 
     def start(self) -> None:
         """Start WebSocket reader, worker, and watchdog threads."""
-        log.info("BinanceCandleManager: seeding buffer via REST...")
+        log.candle("BinanceCandleManager: seeding buffer via REST...")
         self._seed_buffer()
-        log.info("BinanceCandleManager: seed complete, opening WebSocket stream...")
+        log.candle("BinanceCandleManager: seed complete, opening WebSocket stream...")
         self._stop_event.clear()
         self._last_event_ts = time.time()
 
@@ -283,7 +283,7 @@ class BinanceCandleManager:
         self._ws_thread.start()
         with self._ts_lock:
             self._last_event_ts = time.time()
-        log.info("BinanceCandleManager: reconnected.")
+        log.candle("BinanceCandleManager: reconnected.")
 
     def _watchdog_loop(self) -> None:
         """Reconnect if WS silent for more than 90 seconds."""
@@ -361,7 +361,7 @@ class BinanceCandleManager:
         """
         for asset in self._assets:
             if asset.upper() in _COTRIGGER_ASSETS:
-                log.info(f"[{asset}] Co-trigger asset — skipping Binance seed")
+                log.candle(f"[{asset}] Co-trigger asset — skipping Binance seed")
                 continue
             self._try_seed_asset(asset)
 
@@ -377,7 +377,7 @@ class BinanceCandleManager:
         for asset in assets:
             if asset.upper() in _COTRIGGER_ASSETS:
                 if asset not in prev_assets:
-                    log.info(f"[{asset}] Co-trigger asset added — skipping Binance seed")
+                    log.candle(f"[{asset}] Co-trigger asset added — skipping Binance seed")
                 continue
             with self._lock:
                 has_buffer = bool(self._buffer.get(asset))

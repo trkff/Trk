@@ -165,6 +165,15 @@ class LighterCandleManager:
         self._ts_lock = threading.Lock()
         self._last_update_ms: dict[tuple[str, str], int] = {}
 
+        # Per-close dedup: tracks the `t` of the last candle whose close we
+        # already announced for each (asset, tf). Accessed from both the WS
+        # message thread (_on_message) and the boundary fallback thread
+        # (_check_boundary_fallback); without _emit_lock, both can read the
+        # same `last_emitted`, both decide to emit, and the same close gets
+        # enqueued twice → duplicate process_asset → duplicate trades.
+        self._last_emitted_t: dict[tuple[str, str], int] = {}
+        self._emit_lock = threading.Lock()
+
         # subscriptions: (asset, tf) → market_id
         self._subscriptions: dict[tuple[str, str], int] = {}
 
@@ -357,20 +366,21 @@ class LighterCandleManager:
                 continue  # snapshot nunca emite
 
             if emitted_close and not self._paused:
-                # dedup: só emite se ainda não emitimos esse close
-                last_emitted = getattr(self, "_last_emitted_t", {}).get(key, 0)
-                # O close é da vela ANTERIOR. last_emitted guarda o t da vela
-                # cujo close já anunciamos. Se o t anterior (= incoming - tf) for
-                # > last_emitted, ainda não anunciamos esse close.
+                # dedup: só emite se ainda não emitimos esse close.
+                # O close é da vela ANTERIOR. _last_emitted_t guarda o t da
+                # vela cujo close já anunciamos. Check-and-set é feito sob
+                # _emit_lock para impedir que esta thread e _check_boundary_fallback
+                # leiam o mesmo last_emitted e ambas enfileirem o mesmo close.
                 prev_t = int(c["t"]) - _INTERVAL_MS[interval]
-                if prev_t > last_emitted:
-                    if not hasattr(self, "_last_emitted_t"):
-                        self._last_emitted_t: dict[tuple[str, str], int] = {}
+                with self._emit_lock:
+                    last_emitted = self._last_emitted_t.get(key, 0)
+                    if prev_t <= last_emitted:
+                        continue  # outro caminho já emitiu este close
                     self._last_emitted_t[key] = prev_t
-                    try:
-                        self._queue.put_nowait((asset, interval))
-                    except queue.Full:
-                        pass
+                try:
+                    self._queue.put_nowait((asset, interval))
+                except queue.Full:
+                    pass
 
     def _resolve_market_id(self, asset: str) -> int | None:
         try:
@@ -543,9 +553,14 @@ class LighterCandleManager:
             if tf != interval:
                 continue
 
-            last_emitted = getattr(self, "_last_emitted_t", {}).get((asset, tf), 0)
-            if last_emitted >= prev_t:
-                continue  # WS already emitted via _on_message
+            # Atomic check-and-set under _emit_lock — claim the right to emit
+            # this close BEFORE doing the REST roundtrip. If we did the
+            # roundtrip first and then claimed, _on_message could slip in
+            # between and we'd emit the same close twice.
+            with self._emit_lock:
+                if self._last_emitted_t.get((asset, tf), 0) >= prev_t:
+                    continue  # WS path (or a previous fallback tick) already emitted
+                self._last_emitted_t[(asset, tf)] = prev_t
 
             try:
                 df = self._client.get_candles(asset, tf, count=2)
@@ -559,9 +574,6 @@ class LighterCandleManager:
             self._set_buffer((asset, tf), df.copy())
             self._last_update_ms[(asset, tf)] = new_last
 
-            if not hasattr(self, "_last_emitted_t"):
-                self._last_emitted_t = {}
-            self._last_emitted_t[(asset, tf)] = prev_t
             try:
                 self._queue.put_nowait((asset, tf))
                 log.candle(f"[{asset}] {tf} boundary fallback fired")

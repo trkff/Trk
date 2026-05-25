@@ -46,7 +46,12 @@
       "Bash(python -c \":*)",
       "Bash(pytest:*)",
       "Skill(claude-md-management:revise-claude-md)",
-      "Bash(Get-ChildItem -Path \"D:\\\\Documentos\\\\Trae\\\\RazorHL\\\\hyperliquid-bot\\\\\" -Recurse -Force | Select-Object FullName | Sort-Object FullName)"
+      "Bash(Get-ChildItem -Path \"D:\\\\Documentos\\\\Trae\\\\RazorHL\\\\hyperliquid-bot\\\\\" -Recurse -Force | Select-Object FullName | Sort-Object FullName)",
+      "Bash(pm2 start *)",
+      "Bash(pm2 save *)",
+      "Bash(where pm2-startup *)",
+      "Bash(pm2-startup install *)",
+      "Bash(reg query *)"
     ],
     "defaultMode": "bypassPermissions"
   },
