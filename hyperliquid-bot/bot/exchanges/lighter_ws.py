@@ -283,10 +283,18 @@ class LighterCandleManager:
     def _on_message(self, ws, raw: str) -> None:
         with self._ts_lock:
             self._last_msg_ts = time.time()
+        self._msg_count = getattr(self, "_msg_count", 0) + 1
+        if self._msg_count <= 5 or self._msg_count % 100 == 0:
+            log.info(f"Lighter WS msg #{self._msg_count}: {raw[:200]}")
 
         try:
             msg = json.loads(raw)
         except Exception:
+            return
+
+        # Surface server errors (e.g. 30010 "Too Many Inflight Messages")
+        if "error" in msg:
+            log.warning(f"Lighter WS error msg: {msg.get('error')}")
             return
 
         msg_type = msg.get("type", "")
@@ -380,13 +388,23 @@ class LighterCandleManager:
                     log.warning(f"[{asset}] seed {tf} failed: {e}")
 
     def _on_open(self, ws) -> None:
-        """Send subscribes for all (asset, tf) pairs in self._subscriptions."""
+        """Send subscribes for all (asset, tf) pairs, spaced to dodge rate limit.
+
+        Lighter returns error 30010 'Too Many Inflight Messages' if subscribes
+        arrive too fast. 20ms spacing keeps us under the threshold.
+        """
+        total = len(self._subscriptions)
+        log.info(f"Lighter WS open: sending {total} subscribes (20ms apart)...")
+        sent = 0
         for (asset, tf), market_id in self._subscriptions.items():
             sub = {"type": "subscribe", "channel": f"candle/{market_id}/{tf}"}
             try:
                 ws.send(json.dumps(sub))
+                sent += 1
             except Exception as e:
                 log.warning(f"[{asset}] subscribe {tf} failed: {e}")
+            time.sleep(0.02)
+        log.info(f"Lighter WS open: sent {sent}/{total} subscribes")
 
     def _on_error(self, ws, error) -> None:
         log.error(f"Lighter WS error: {error}")
