@@ -286,9 +286,10 @@ class TestSharedBuffer:
 
 class TestBoundaryFallback:
     def test_silent_channel_triggers_rest_and_emits(self):
+        # Canal WS sem nenhuma mensagem recente (channel_last_msg_ts antigo) →
+        # boundary fallback dispara REST e enfileira close.
         cb = MagicMock()
         client = _mk_client()
-        # Simula REST devolvendo uma vela nova
         new_row_df = pd.DataFrame([{
             "timestamp": 1700000300000,
             "open": 1.0, "high": 1.0, "low": 1.0, "close": 99.0, "volume": 0.0,
@@ -304,18 +305,41 @@ class TestBoundaryFallback:
             on_candle_close=cb,
         )
         mgr._subscriptions = {("BTC", "5m"): 0}
-        # Última update conhecida = vela 1700000000000 (já fechada faz tempo)
-        mgr._last_update_ms[("BTC", "5m")] = 1700000000000
+        # WS silente: nenhuma mensagem recente (channel_last_msg_ts ausente = 0)
+        # Já que o threshold é 10s, time.time() - 0 >> 10 → silente.
 
-        # Boundary que já passou (todas as velas após 1700000000000 estão silentes)
         boundary_ms = 1700000300000
         mgr._check_boundary_fallback(boundary_ms, "5m")
 
-        # Deve ter chamado REST e enfileirado o close
         client.get_candles.assert_called()
         assert mgr._queue.qsize() == 1
 
-    def test_recent_update_skips_rest(self):
+    def test_active_channel_skips_rest(self):
+        # WS empurrando mensagens recentes para o canal (mesmo que sejam updates
+        # do candle antigo) → não dispara fallback. WS está vivo, vai emitir close
+        # via _on_message quando a primeira trade do novo candle chegar.
+        import time as _time
+        cb = MagicMock()
+        client = _mk_client()
+        mgr = LighterCandleManager(
+            client=client,
+            assets=["BTC"],
+            intervals=["5m"],
+            on_candle_close=cb,
+        )
+        mgr._subscriptions = {("BTC", "5m"): 0}
+        # Sinaliza que canal recebeu mensagem agora (dentro do threshold)
+        mgr._channel_last_msg_ts[("BTC", "5m")] = _time.time()
+
+        boundary_ms = 1700000300000
+        mgr._check_boundary_fallback(boundary_ms, "5m")
+
+        client.get_candles.assert_not_called()
+        assert mgr._queue.qsize() == 0
+
+    def test_already_emitted_skips_rest(self):
+        # _on_message já emitiu o close via WS push do novo t → boundary fallback
+        # respeita o dedup e não chama REST.
         cb = MagicMock()
         client = _mk_client()
         mgr = LighterCandleManager(
@@ -326,9 +350,9 @@ class TestBoundaryFallback:
         )
         mgr._subscriptions = {("BTC", "5m"): 0}
         boundary_ms = 1700000300000
-        # WS já trouxe update da vela atual (após o boundary)
-        mgr._last_update_ms[("BTC", "5m")] = boundary_ms + 1000
-
+        prev_t = boundary_ms - _INTERVAL_MS["5m"]
+        mgr._last_emitted_t = {("BTC", "5m"): prev_t}
+        # canal silente (channel_last_msg_ts ausente) mas já emitido → skip
         mgr._check_boundary_fallback(boundary_ms, "5m")
 
         client.get_candles.assert_not_called()

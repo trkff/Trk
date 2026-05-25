@@ -123,6 +123,9 @@ _SEED_COUNT = 500
 _BOUNDARY_MARGIN_MS = 5000   # wait 5s past boundary so WS has priority before REST fallback fires
                               # (2s was too short for low-volume assets whose first trade in the
                               # new candle takes 3-5s to arrive)
+_CHANNEL_SILENT_THRESHOLD_S = 10.0  # boundary fallback fires only if the channel got no WS
+                                     # message at all in this many seconds (wall clock).
+                                     # Old candle updates still count — they prove WS is alive.
 
 
 class LighterCandleManager:
@@ -164,6 +167,10 @@ class LighterCandleManager:
         self._last_msg_ts: float = 0.0
         self._ts_lock = threading.Lock()
         self._last_update_ms: dict[tuple[str, str], int] = {}
+        # Wall-clock time.time() of the last WS message for each channel.
+        # Used by boundary fallback to skip channels where WS is actively delivering
+        # (even if updates are still for the previous candle — they confirm WS is alive).
+        self._channel_last_msg_ts: dict[tuple[str, str], float] = {}
 
         # subscriptions: (asset, tf) → market_id
         self._subscriptions: dict[tuple[str, str], int] = {}
@@ -201,9 +208,9 @@ class LighterCandleManager:
         log.info("LighterCandleManager: stopped.")
 
     def start(self) -> None:
-        log.info("LighterCandleManager: seeding buffer via REST...")
+        log.candle("LighterCandleManager: seeding buffer via REST...")
         self._seed_buffer()
-        log.info(f"LighterCandleManager: seed complete ({len(self._subscriptions)} subscriptions). Opening WS...")
+        log.candle(f"LighterCandleManager: seed complete ({len(self._subscriptions)} subscriptions). Opening WS...")
         self._stop_event.clear()
         with self._ts_lock:
             self._last_msg_ts = time.time()
@@ -298,7 +305,7 @@ class LighterCandleManager:
             self._last_msg_ts = time.time()
         self._msg_count = getattr(self, "_msg_count", 0) + 1
         if self._msg_count <= 5 or self._msg_count % 100 == 0:
-            log.info(f"Lighter WS msg #{self._msg_count}: {raw[:200]}")
+            log.candle(f"Lighter WS msg #{self._msg_count}: {raw[:200]}")
 
         try:
             msg = json.loads(raw)
@@ -341,6 +348,7 @@ class LighterCandleManager:
 
         key = (asset, interval)
         is_snapshot = msg_type == "subscribed/candle"
+        self._channel_last_msg_ts[key] = time.time()
 
         # Para snapshot inicial pode vir múltiplas velas; aplica todas sem emitir
         # evento. Para update, sempre processa a última.
@@ -407,7 +415,7 @@ class LighterCandleManager:
         arrive too fast. 20ms spacing keeps us under the threshold.
         """
         total = len(self._subscriptions)
-        log.info(f"Lighter WS open: sending {total} subscribes (20ms apart)...")
+        log.candle(f"Lighter WS open: sending {total} subscribes (20ms apart)...")
         sent = 0
         for (asset, tf), market_id in self._subscriptions.items():
             sub = {"type": "subscribe", "channel": f"candle/{market_id}/{tf}"}
@@ -417,7 +425,7 @@ class LighterCandleManager:
             except Exception as e:
                 log.warning(f"[{asset}] subscribe {tf} failed: {e}")
             time.sleep(0.02)
-        log.info(f"Lighter WS open: sent {sent}/{total} subscribes")
+        log.candle(f"Lighter WS open: sent {sent}/{total} subscribes")
 
     def _on_error(self, ws, error) -> None:
         log.error(f"Lighter WS error: {error}")
@@ -523,18 +531,34 @@ class LighterCandleManager:
         self._ws_thread.start()
         with self._ts_lock:
             self._last_msg_ts = time.time()
-        log.info("LighterCandleManager: reconnected.")
+        log.candle("LighterCandleManager: reconnected.")
 
     def _check_boundary_fallback(self, boundary_ms: int, interval: str) -> None:
-        """For every subscribed (asset, interval) where _last_update_ms is older
-        than `boundary_ms`, force a REST fetch and emit close event if new candle found.
+        """For every subscribed (asset, interval), check if the WS channel went
+        silent (no message at all in the last _CHANNEL_SILENT_THRESHOLD_S seconds)
+        AND we haven't yet emitted the close that's now due. If both, force REST.
+
+        We do NOT use `_last_update_ms` here: that field tracks the OPEN timestamp
+        of the candle being updated, which lags the boundary because Lighter keeps
+        publishing trades on the OLD candle for a few seconds past the boundary
+        (delayed aggregation). The wall-clock `_channel_last_msg_ts` is a much
+        better proxy for "is WS alive for this channel".
         """
+        prev_t = boundary_ms - _INTERVAL_MS[interval]
+        now = time.time()
         for (asset, tf), _ in list(self._subscriptions.items()):
             if tf != interval:
                 continue
-            last = self._last_update_ms.get((asset, tf), 0)
-            if last >= boundary_ms:
-                continue  # WS already brought a newer update
+
+            # Skip if WS already emitted this close (covered by _on_message dedup)
+            last_emitted = getattr(self, "_last_emitted_t", {}).get((asset, tf), 0)
+            if last_emitted >= prev_t:
+                continue
+
+            # Skip if WS is delivering messages for this channel (any msg recent)
+            last_msg = self._channel_last_msg_ts.get((asset, tf), 0.0)
+            if now - last_msg < _CHANNEL_SILENT_THRESHOLD_S:
+                continue  # WS healthy for this channel — trust it to emit eventually
 
             try:
                 df = self._client.get_candles(asset, tf, count=2)
@@ -545,19 +569,14 @@ class LighterCandleManager:
                 continue
 
             new_last = int(df.iloc[-1]["timestamp"])
-            # REST returns fully-consolidated OHLC; overwrite the buffer
             self._set_buffer((asset, tf), df.copy())
             self._last_update_ms[(asset, tf)] = new_last
 
-            # Emit close if we haven't emitted the previous candle yet
-            prev_t = boundary_ms - _INTERVAL_MS[tf]
-            last_emitted = getattr(self, "_last_emitted_t", {}).get((asset, tf), 0)
-            if prev_t > last_emitted:
-                if not hasattr(self, "_last_emitted_t"):
-                    self._last_emitted_t = {}
-                self._last_emitted_t[(asset, tf)] = prev_t
-                try:
-                    self._queue.put_nowait((asset, tf))
-                    log.info(f"[{asset}] {tf} boundary fallback fired (WS silent)")
-                except queue.Full:
-                    pass
+            if not hasattr(self, "_last_emitted_t"):
+                self._last_emitted_t = {}
+            self._last_emitted_t[(asset, tf)] = prev_t
+            try:
+                self._queue.put_nowait((asset, tf))
+                log.candle(f"[{asset}] {tf} boundary fallback fired (WS silent)")
+            except queue.Full:
+                pass
