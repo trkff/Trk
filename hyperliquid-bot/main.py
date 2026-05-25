@@ -89,14 +89,32 @@ def bot_loop():
         global_assets = ["BTC", "ETH", "SOL"]
     initial_assets = get_active_assets(global_assets)
 
-    # Timestamps for 15m/30m/1h/4h/1d candle close detection
-    last_15m_ts: dict[str, int] = {}
-    last_30m_ts: dict[str, int] = {}
-    last_1h_ts:  dict[str, int] = {}
-    last_4h_ts:  dict[str, int] = {}
-    last_1d_ts:  dict[str, int] = {}
+    # Timestamps for 15m/30m/1h/4h/1d candle close detection.
+    # Persistidos em SQLite (config table com prefix `last_ts.<tf>.<asset>`)
+    # para sobreviver a restart — sem isso, primeira detecção pós-restart era
+    # sempre falso positivo (dict vazio → `latest_ts > 0` sempre True), o que
+    # disparava estratégias 1h/30m/4h fora do boundary correto.
+    last_15m_ts: dict[str, int] = db.get_last_candle_ts("15m")
+    last_30m_ts: dict[str, int] = db.get_last_candle_ts("30m")
+    last_1h_ts:  dict[str, int] = db.get_last_candle_ts("1h")
+    last_4h_ts:  dict[str, int] = db.get_last_candle_ts("4h")
+    last_1d_ts:  dict[str, int] = db.get_last_candle_ts("1d")
+    if last_1h_ts or last_4h_ts or last_1d_ts:
+        log.info(
+            f"Restored candle ts cache: 15m={len(last_15m_ts)} 30m={len(last_30m_ts)} "
+            f"1h={len(last_1h_ts)} 4h={len(last_4h_ts)} 1d={len(last_1d_ts)} assets"
+        )
 
     def on_candle_close(asset: str, interval: str):
+        # process_asset detecta TODOS os TFs internamente via _detect_new (5m, 15m,
+        # 30m, 1h, 4h, 1d). Como 15m/30m/1h/4h/1d boundaries são MÚLTIPLOS de 5m,
+        # eles sempre coincidem com um 5m boundary — basta disparar no 5m close pra
+        # processar tudo. Sem esse gate, o LighterCandleManager (que emite close
+        # para CADA tf subscrito) chama process_asset N vezes no mesmo boundary
+        # (ex: 23:30 dispara 5m + 30m → duas chamadas → "New 5m candle closed"
+        # duplicado por ativo).
+        if interval != "5m":
+            return
         try:
             current_cfg = db.get_all_config()
             process_asset(asset, current_cfg,
@@ -293,22 +311,24 @@ def process_asset(asset: str, cfg: dict,
     # new_5m is always True — called only on 5m candle close
     new_5m = True
 
-    # Detect boundary close de 15m/30m/1h/4h/1d via timestamp do último candle
-    def _detect_new(tf_label: str, df, store: dict) -> bool:
+    # Detect boundary close de 15m/30m/1h/4h/1d via timestamp do último candle.
+    # `tf_key` é o nome usado no DB (15m/30m/1h/4h/1d) — `tf_label` é só pro log.
+    def _detect_new(tf_label: str, tf_key: str, df, store: dict) -> bool:
         if df is None or df.empty:
             return False
         latest_ts = int(df["timestamp"].iloc[-1])
         if latest_ts > store.get(asset, 0):
             store[asset] = latest_ts
+            db.set_last_candle_ts(tf_key, asset, latest_ts)
             log.info(f"[{asset}] New {tf_label} candle closed")
             return True
         return False
 
-    new_15m = "15m" in active and _detect_new("15m", df_15m, last_15m_ts)
-    new_30m = "30m" in active and _detect_new("30m", df_30m, last_30m_ts)
-    new_1h  = "1h"  in active and _detect_new("1H",  df_1h,  last_1h_ts)
-    new_4h  = "4h"  in active and _detect_new("4H",  df_4h,  last_4h_ts)
-    new_1d  = "1d"  in active and _detect_new("1D",  df_1d,  last_1d_ts)
+    new_15m = "15m" in active and _detect_new("15m", "15m", df_15m, last_15m_ts)
+    new_30m = "30m" in active and _detect_new("30m", "30m", df_30m, last_30m_ts)
+    new_1h  = "1h"  in active and _detect_new("1H",  "1h",  df_1h,  last_1h_ts)
+    new_4h  = "4h"  in active and _detect_new("4H",  "4h",  df_4h,  last_4h_ts)
+    new_1d  = "1d"  in active and _detect_new("1D",  "1d",  df_1d,  last_1d_ts)
 
     # Merge strategy params into effective cfg
     mr_params = db.get_strategy_config("mean_reversion").get("params", {})
