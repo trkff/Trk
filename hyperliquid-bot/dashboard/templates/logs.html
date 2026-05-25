@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+{% block title %}Logs{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1 class="page-title">Logs</h1>
+  <p class="page-subtitle">Visualizador de logs em tempo real</p>
+</div>
+
+<div class="filters">
+  <div class="filter-group">
+    <span class="filter-label">N&iacute;vel</span>
+    <select id="f-level" style="width:120px" onchange="loadLogs()">
+      <option value="">Todos</option>
+      <option value="SIGNALS">SIGNALS</option>
+      <option value="BACKTEST">BACKTEST</option>
+      <option value="CANDLE">CANDLE</option>
+      <option value="INFO">INFO</option>
+      <option value="WARNING">WARNING</option>
+      <option value="ERROR">ERROR</option>
+      <option value="DEBUG">DEBUG</option>
+    </select>
+  </div>
+  <div class="filter-group" style="flex:1;min-width:240px;">
+    <span class="filter-label">Buscar (texto)</span>
+    <input type="text" id="f-search" placeholder="ex: ZEC, BB_STOCH SCAN, market_open"
+           oninput="onSearchInput()" style="width:100%;">
+  </div>
+  <div class="filter-group">
+    <span class="filter-label">Limite</span>
+    <select id="f-limit" style="width:100px" onchange="loadLogs()">
+      <option value="300">300</option>
+      <option value="1000">1000</option>
+      <option value="3000">3000</option>
+      <option value="10000">10000</option>
+    </select>
+  </div>
+  <div class="filter-group" style="align-self:flex-end;">
+    <button class="btn btn-outline" onclick="loadLogs()" style="cursor:pointer">Atualizar</button>
+  </div>
+  <div class="filter-group" style="align-self:flex-end;">
+    <span id="f-count" style="font-size:0.75rem;color:#64748B;font-family:'JetBrains Mono',monospace;"></span>
+  </div>
+</div>
+
+<div class="log-viewer" id="log-viewer">
+  <div class="empty-state"><p>Carregando logs...</p></div>
+</div>
+
+<div id="toast" class="toast"></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let _allLogs = [];
+let _searchTimer = null;
+
+async function loadLogs() {
+  const level = document.getElementById('f-level').value;
+  const limit = document.getElementById('f-limit').value || '300';
+  const params = new URLSearchParams();
+  if (level) params.set('level', level);
+  params.set('limit', limit);
+
+  const logs = await apiGet('/api/logs?' + params);
+  if (!logs) return;
+  _allLogs = logs;
+  renderLogs();
+}
+
+function onSearchInput() {
+  // debounce client-side filter — sem chamar API
+  clearTimeout(_searchTimer);
+  _searchTimer = setTimeout(renderLogs, 150);
+}
+
+function renderLogs() {
+  const viewer = document.getElementById('log-viewer');
+  const countEl = document.getElementById('f-count');
+  const term = (document.getElementById('f-search').value || '').trim().toLowerCase();
+
+  let filtered = _allLogs;
+  if (term) {
+    filtered = _allLogs.filter(l =>
+      (l.message || '').toLowerCase().includes(term) ||
+      (l.module || '').toLowerCase().includes(term)
+    );
+  }
+
+  countEl.textContent = term
+    ? `${filtered.length} / ${_allLogs.length}`
+    : `${_allLogs.length}`;
+
+  if (!filtered.length) {
+    viewer.innerHTML = '<div class="empty-state"><p>Nenhum log encontrado</p></div>';
+    return;
+  }
+
+  viewer.innerHTML = filtered.map(l => `
+    <div class="log-entry">
+      <span class="log-ts">${formatTime(l.timestamp)}</span>
+      <span class="log-level ${l.level}">${l.level}</span>
+      <span class="log-module">${l.module}</span>
+      <span class="log-msg">${highlight(escapeHtml(l.message), term)}</span>
+    </div>
+  `).join('');
+}
+
+function highlight(text, term) {
+  if (!term) return text;
+  // escapa regex
+  const safe = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(`(${safe})`, 'gi');
+  return text.replace(re, '<mark style="background:#FBBF24;color:#0A1018;padding:0 2px;border-radius:2px;">$1</mark>');
+}
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+loadLogs();
+setInterval(loadLogs, 5000);
+</script>
+{% endblock %}

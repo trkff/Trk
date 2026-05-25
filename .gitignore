@@ -1,0 +1,65 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# RazorHL specific
+hyperliquid-bot/bot_data.db
+hyperliquid-bot/bot_data.db-shm
+hyperliquid-bot/bot_data.db-wal
+hyperliquid-bot/logs/
+hyperliquid-bot/candles/cache/
+
+# Historical candles (regenerable via csv_loader._update_csv)
+candles/*.csv
+candles/*.json
+candles/*.py
+hyperliquid-bot/=1.6.0
+
+# Secrets / local config
+.env
+.env.local
+*.key
+*.pem
+
+# Node (for ecosystem.config.js / pm2)
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Claude session
+.claude/projects/

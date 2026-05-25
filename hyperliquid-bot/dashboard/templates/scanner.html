@@ -1,0 +1,514 @@
+{% extends "base.html" %}
+{% block title %}Scanner{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1 class="page-title">Scanner</h1>
+  <p class="page-subtitle">Busca otimizada de parâmetros por ativo</p>
+</div>
+
+<!-- Filters -->
+<div class="filters">
+  <div class="filter-group">
+    <span class="filter-label">Timeframe</span>
+    <select id="sc-tf" style="width:100px" onchange="reloadAssets()">
+      <option value="5m" selected>5m</option>
+      <option value="15m">15m</option>
+      <option value="30m">30m</option>
+      <option value="1h">1h</option>
+    </select>
+  </div>
+  <div class="filter-group">
+    <span class="filter-label">Ativo</span>
+    <select id="sc-asset" style="width:120px"></select>
+  </div>
+  <div class="filter-group">
+    <span class="filter-label">Período</span>
+    <select id="sc-days" style="width:120px">
+      <option value="30">30 dias</option>
+      <option value="60">60 dias</option>
+      <option value="90" selected>90 dias</option>
+      <option value="180">180 dias</option>
+    </select>
+  </div>
+  <div class="filter-group" style="flex-direction:column;align-items:flex-start;gap:6px;">
+    <span class="filter-label">Estratégias</span>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;">
+      <label class="sc-chk"><input type="checkbox" value="BB_Stoch"     checked> BB Stoch</label>
+      <label class="sc-chk"><input type="checkbox" value="Stoch_Scalp"  checked> Stoch Scalp</label>
+      <label class="sc-chk"><input type="checkbox" value="EMA_Cross"    checked> EMA Cross</label>
+      <label class="sc-chk"><input type="checkbox" value="BB_Reversion" checked> BB Reversion</label>
+      <label class="sc-chk"><input type="checkbox" value="RSI_Scalp"    checked> RSI Scalp</label>
+      <label class="sc-chk"><input type="checkbox" value="BB_RSI"       checked> BB RSI</label>
+      <label class="sc-chk"><input type="checkbox" value="MACD_Cross"   checked> MACD Cross</label>
+      <label class="sc-chk"><input type="checkbox" value="Williams_R"   checked> Williams %R</label>
+    </div>
+  </div>
+  <div class="filter-group" style="align-self:flex-end;">
+    <button class="btn btn-primary" onclick="runScan()" style="cursor:pointer">&#9654; Rodar</button>
+  </div>
+</div>
+
+<!-- Loading -->
+<div id="sc-loading" style="display:none;padding:32px 0;text-align:center;">
+  <div class="spinner" style="display:inline-block;width:32px;height:32px;border:3px solid #1E3A5F;border-top-color:#3B82F6;border-radius:50%;animation:spin 0.8s linear infinite;margin-bottom:12px;"></div>
+  <div id="sc-progress" style="color:#94A3B8;font-size:0.875rem;margin-top:8px;">Iniciando...</div>
+</div>
+
+<!-- Error -->
+<div id="sc-error" style="display:none;padding:16px;background:rgba(239,68,68,0.1);border:1px solid #EF4444;border-radius:8px;color:#EF4444;margin-bottom:16px;"></div>
+
+<!-- Results -->
+<div id="sc-results" style="display:none;">
+
+  <!-- Summary cards -->
+  <div class="card-grid" style="margin-bottom:24px;" id="sc-summary-cards"></div>
+
+  <!-- Strategy tabs + Filter toggle -->
+  <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:12px;">
+    <div style="display:flex;gap:8px;flex-wrap:wrap;" id="sc-tabs"></div>
+    <button class="sc-tab" id="filter-toggle-btn" onclick="toggleFilters()" style="border-color:#3B82F6;color:#3B82F6;">
+      &#9881; Filtros
+    </button>
+  </div>
+
+  <!-- Filter panel -->
+  <div id="sc-filter-panel" style="display:none;background:#0A1018;border:1px solid #1E3A5F;border-radius:8px;padding:16px;margin-bottom:16px;">
+    <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-end;">
+      <div class="flt-group">
+        <div class="flt-label">Min ROI (%)</div>
+        <input class="flt-input" type="number" id="f-roi"     placeholder="0"   step="1"   oninput="applyFilters()">
+      </div>
+      <div class="flt-group">
+        <div class="flt-label">Min Win Rate (%)</div>
+        <input class="flt-input" type="number" id="f-wr"      placeholder="50"  step="1"   oninput="applyFilters()">
+      </div>
+      <div class="flt-group">
+        <div class="flt-label">Min PF</div>
+        <input class="flt-input" type="number" id="f-pf"      placeholder="1.1" step="0.05" oninput="applyFilters()">
+      </div>
+      <div class="flt-group">
+        <div class="flt-label">Max DD (%)</div>
+        <input class="flt-input" type="number" id="f-dd"      placeholder="100" step="1"   oninput="applyFilters()">
+      </div>
+      <div class="flt-group">
+        <div class="flt-label">Min Trades</div>
+        <input class="flt-input" type="number" id="f-trades"  placeholder="0"   step="1"   oninput="applyFilters()">
+      </div>
+      <div class="flt-group">
+        <div class="flt-label">Min TPD</div>
+        <input class="flt-input" type="number" id="f-tpd-min" placeholder="0"   step="0.5" oninput="applyFilters()">
+      </div>
+      <div class="flt-group">
+        <div class="flt-label">Max TPD</div>
+        <input class="flt-input" type="number" id="f-tpd-max" placeholder="999" step="0.5" oninput="applyFilters()">
+      </div>
+      <div style="display:flex;gap:8px;align-self:flex-end;">
+        <button class="btn" onclick="resetFilters()" style="background:#1E3A5F;cursor:pointer;">Resetar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Count -->
+  <div id="sc-count" style="color:#64748B;font-size:0.8rem;margin-bottom:8px;"></div>
+
+  <!-- Table -->
+  <div class="table-container">
+    <table id="sc-table">
+      <thead>
+        <tr>
+          <th class="sortable" data-col="strategy"  onclick="sortBy('strategy')">Estratégia <span class="sort-icon">⇅</span></th>
+          <th>Parâmetros</th>
+          <th class="sortable" data-col="trades"    onclick="sortBy('trades')">Trades <span class="sort-icon">⇅</span></th>
+          <th class="sortable" data-col="wr"        onclick="sortBy('wr')">Win Rate <span class="sort-icon">⇅</span></th>
+          <th class="sortable" data-col="roi"       onclick="sortBy('roi')">ROI (%) <span class="sort-icon">⇅</span></th>
+          <th class="sortable" data-col="pf"        onclick="sortBy('pf')">PF <span class="sort-icon">⇅</span></th>
+          <th class="sortable" data-col="tpd"       onclick="sortBy('tpd')">TPD <span class="sort-icon">⇅</span></th>
+          <th class="sortable" data-col="max_dd"    onclick="sortBy('max_dd')">Max DD (%) <span class="sort-icon">⇅</span></th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="sc-tbody">
+        <tr><td colspan="9" class="empty-state"><p>Rode o scanner para ver resultados</p></td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div id="toast" class="toast"></div>
+
+<!-- Apply modal -->
+<div id="sc-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:1000;align-items:center;justify-content:center;">
+  <div style="background:#0F1923;border:1px solid #1E3A5F;border-radius:12px;padding:24px;width:480px;max-width:90vw;">
+    <h3 style="margin:0 0 16px;color:#E2E8F0;">Aplicar Parâmetros</h3>
+    <p style="color:#94A3B8;font-size:0.875rem;margin-bottom:12px;">
+      Instância: <span id="modal-instance" style="color:#3B82F6;font-weight:600;"></span>
+    </p>
+    <div style="margin-bottom:12px;">
+      <label style="display:block;color:#94A3B8;font-size:0.78rem;margin-bottom:6px;">
+        Identificador (opcional) <span style="color:#64748B;">— para rodar várias versões da mesma estratégia/ativo</span>
+      </label>
+      <input type="text" id="modal-tag" placeholder="ex: agressivo, v2, tp1"
+        oninput="onTagInput()"
+        style="width:100%;background:#0A1018;border:1px solid #1E3A5F;border-radius:6px;padding:8px 10px;color:#E2E8F0;font-family:'JetBrains Mono',monospace;font-size:0.85rem;">
+    </div>
+    <pre id="modal-params" style="background:#0A1018;border:1px solid #1E3A5F;border-radius:6px;padding:12px;font-size:0.8rem;color:#94A3B8;overflow:auto;max-height:200px;"></pre>
+    <div style="display:flex;gap:8px;margin-top:16px;justify-content:flex-end;">
+      <button class="btn" onclick="closeModal()" style="background:#1E3A5F;cursor:pointer;">Cancelar</button>
+      <button class="btn btn-primary" onclick="confirmApply()" style="cursor:pointer;">Confirmar</button>
+    </div>
+  </div>
+</div>
+
+<style>
+@keyframes spin { to { transform: rotate(360deg); } }
+.sc-chk { color:#94A3B8;font-size:0.875rem;display:flex;align-items:center;gap:6px;cursor:pointer; }
+.sc-chk input { accent-color:#3B82F6;cursor:pointer; }
+.sc-tab { padding:6px 14px;border-radius:6px;border:1px solid #1E3A5F;background:transparent;
+          color:#64748B;cursor:pointer;font-family:'JetBrains Mono',monospace;font-size:0.8rem; }
+.sc-tab.active { background:#1E3A5F;color:#E2E8F0;border-color:#3B82F6; }
+.sortable { cursor:pointer;user-select:none; }
+.sortable:hover { color:#E2E8F0; }
+.sort-icon { color:#1E3A5F;font-size:0.7rem; }
+th[data-sorted] .sort-icon { color:#3B82F6; }
+.flt-group { display:flex;flex-direction:column;gap:4px; }
+.flt-label { color:#64748B;font-size:0.75rem;font-family:'JetBrains Mono',monospace; }
+.flt-input { width:90px;background:#0F1923;border:1px solid #1E3A5F;border-radius:6px;
+             padding:6px 8px;color:#E2E8F0;font-family:'JetBrains Mono',monospace;font-size:0.8rem; }
+.flt-input:focus { outline:none;border-color:#3B82F6; }
+</style>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let pollInterval = null;
+let allApproved  = [];    // raw from server
+let filtered     = [];    // after strategy tab + filter panel
+let displayed    = [];    // after sorting
+let activeStrat  = 'all';
+let sortKey      = 'roi';
+let sortDir      = -1;    // -1 = desc, 1 = asc
+let pendingApply = null;
+
+const INSTANCE_MAP = {
+  'BB_Stoch/BTC':'bb_stoch_btc','BB_Stoch/ETH':'bb_stoch_eth','BB_Stoch/SOL':'bb_stoch_sol',
+  'BB_Stoch/ZEC':'bb_stoch_zec','BB_Stoch/TON':'bb_stoch_ton',
+  'Stoch_Scalp/XAU':'stoch_scalp_xau','Stoch_Scalp/WTI':'stoch_scalp_wti','Stoch_Scalp/TON':'stoch_scalp_ton',
+  'EMA_Cross/HYPE':'ema_cross_hype','EMA_Cross/LIT':'ema_cross_lit',
+  'BB_Reversion/BTC':'bb_reversion_btc','BB_Reversion/ETH':'bb_reversion_eth','BB_Reversion/SOL':'bb_reversion_sol',
+  'RSI_Scalp/BTC':'rsi_scalp_btc','RSI_Scalp/ETH':'rsi_scalp_eth','RSI_Scalp/SOL':'rsi_scalp_sol','RSI_Scalp/TON':'rsi_scalp_ton',
+  'BB_RSI/BTC':'bb_rsi_btc','BB_RSI/ETH':'bb_rsi_eth','BB_RSI/SOL':'bb_rsi_sol','BB_RSI/ZEC':'bb_rsi_zec','BB_RSI/TON':'bb_rsi_ton',
+  'MACD_Cross/BTC':'macd_cross_btc','MACD_Cross/ETH':'macd_cross_eth','MACD_Cross/SOL':'macd_cross_sol',
+  'Williams_R/XAU':'williams_r_xau','Williams_R/WTI':'williams_r_wti','Williams_R/TON':'williams_r_ton',
+};
+
+// ── Init: load assets ─────────────────────────────────────────────────────
+async function reloadAssets() {
+  const tf = document.getElementById('sc-tf').value;
+  const sel = document.getElementById('sc-asset');
+  const prev = sel.value;
+  const assets = await apiGet('/api/scanner/assets?timeframe=' + tf) || [];
+  sel.innerHTML = '';
+  if (!assets.length) {
+    const o = document.createElement('option');
+    o.value = ''; o.textContent = '(sem CSV ' + tf + ')';
+    sel.appendChild(o);
+    return;
+  }
+  assets.forEach(a => {
+    const o = document.createElement('option'); o.value = a; o.textContent = a; sel.appendChild(o);
+  });
+  if (prev && assets.includes(prev)) sel.value = prev;
+}
+reloadAssets();
+
+// ── Run ───────────────────────────────────────────────────────────────────
+async function runScan() {
+  clearInterval(pollInterval);
+  document.getElementById('sc-results').style.display = 'none';
+  document.getElementById('sc-error').style.display   = 'none';
+  document.getElementById('sc-loading').style.display = 'block';
+  document.getElementById('sc-progress').textContent  = 'Iniciando...';
+
+  const asset  = document.getElementById('sc-asset').value;
+  const tf     = document.getElementById('sc-tf').value;
+  const days   = parseInt(document.getElementById('sc-days').value);
+  const strats = [...document.querySelectorAll('.sc-chk input:checked')].map(c => c.value);
+  if (!asset)        { showError('Selecione um ativo'); return; }
+  if (!strats.length) { showError('Selecione ao menos uma estratégia'); return; }
+
+  try {
+    const res  = await fetch('/api/scanner/run', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({asset, days, strategies: strats, timeframe: tf}),
+    });
+    const data = await res.json();
+    if (!data.job_id) { showError(data.error || 'Falha ao iniciar'); return; }
+    pollStatus(data.job_id);
+  } catch(e) { showError('Erro de rede: ' + e.message); }
+}
+
+function pollStatus(jobId) {
+  pollInterval = setInterval(async () => {
+    const job = await apiGet('/api/scanner/status/' + jobId);
+    if (!job) return;
+    const el = document.getElementById('sc-progress');
+    if (el) el.textContent = job.progress || '';
+    if (job.status === 'done') {
+      clearInterval(pollInterval);
+      document.getElementById('sc-loading').style.display = 'none';
+      document.getElementById('sc-results').style.display = 'block';
+      renderResults(job.result);
+    } else if (job.status === 'error') {
+      clearInterval(pollInterval);
+      showError(job.error || 'Erro desconhecido');
+    }
+  }, 2000);
+}
+
+// ── Render ────────────────────────────────────────────────────────────────
+function renderResults(data) {
+  allApproved = data.approved || [];
+  activeStrat = 'all';
+  sortKey = 'roi'; sortDir = -1;
+  renderSummaryCards(data);
+  renderTabs(data);
+  applyFilters();
+}
+
+function renderSummaryCards(data) {
+  const ps = data.per_strategy || {};
+  let html = `
+    <div class="card"><div class="card-label">Total Testados</div><div class="card-value">${data.total_tested||0}</div></div>
+    <div class="card"><div class="card-label">Aprovados</div><div class="card-value pnl-positive">${data.total_approved||0}</div></div>
+    <div class="card"><div class="card-label">Candles</div><div class="card-value">${data.candles||0}</div></div>`;
+  Object.entries(ps).forEach(([strat, s]) => {
+    const best = s.best_roi;
+    html += `<div class="card">
+      <div class="card-label">${strat.replace(/_/g,' ')}</div>
+      <div class="card-value">${s.approved} aprovados</div>
+      ${best ? `<div style="font-size:0.75rem;color:#64748B;margin-top:4px;">Melhor ROI: <span class="pnl-positive">${best.roi}%</span></div>` : ''}
+    </div>`;
+  });
+  document.getElementById('sc-summary-cards').innerHTML = html;
+}
+
+function renderTabs(data) {
+  const ps = data.per_strategy || {};
+  const strategies = Object.keys(ps).filter(k => ps[k].approved > 0);
+  let html = `<button class="sc-tab active" data-strat="all" onclick="filterStrat('all',this)">Todos (${allApproved.length})</button>`;
+  strategies.forEach(s => {
+    html += `<button class="sc-tab" data-strat="${s}" onclick="filterStrat('${s}',this)">${s.replace(/_/g,' ')} (${ps[s].approved})</button>`;
+  });
+  document.getElementById('sc-tabs').innerHTML = html;
+}
+
+// ── Strategy tab filter ───────────────────────────────────────────────────
+function filterStrat(strat, btn) {
+  activeStrat = strat;
+  document.querySelectorAll('.sc-tab[data-strat]').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  applyFilters();
+}
+
+// ── Filter panel ──────────────────────────────────────────────────────────
+function toggleFilters() {
+  const p = document.getElementById('sc-filter-panel');
+  const b = document.getElementById('filter-toggle-btn');
+  const open = p.style.display === 'block';
+  p.style.display = open ? 'none' : 'block';
+  b.style.background = open ? 'transparent' : '#1E3A5F';
+}
+
+function applyFilters() {
+  const v = id => parseFloat(document.getElementById(id).value);
+  const minRoi    = isNaN(v('f-roi'))     ? -Infinity : v('f-roi');
+  const minWr     = isNaN(v('f-wr'))      ? 0         : v('f-wr') / 100;
+  const minPf     = isNaN(v('f-pf'))      ? 0         : v('f-pf');
+  const maxDd     = isNaN(v('f-dd'))      ? Infinity  : v('f-dd');
+  const minTrades = isNaN(v('f-trades'))  ? 0         : v('f-trades');
+  const minTpd    = isNaN(v('f-tpd-min')) ? 0         : v('f-tpd-min');
+  const maxTpd    = isNaN(v('f-tpd-max')) ? Infinity  : v('f-tpd-max');
+
+  filtered = allApproved.filter(r => {
+    if (activeStrat !== 'all' && r.strategy !== activeStrat) return false;
+    if (r.roi    < minRoi)    return false;
+    if (r.wr     < minWr)     return false;
+    if (r.pf     < minPf)     return false;
+    if (r.max_dd > maxDd)     return false;
+    if (r.trades < minTrades) return false;
+    if (r.tpd    < minTpd || r.tpd > maxTpd) return false;
+    return true;
+  });
+
+  sortAndRender();
+}
+
+function resetFilters() {
+  ['f-roi','f-wr','f-pf','f-dd','f-trades','f-tpd-min','f-tpd-max'].forEach(
+    id => document.getElementById(id).value = ''
+  );
+  applyFilters();
+}
+
+// ── Sorting ───────────────────────────────────────────────────────────────
+function sortBy(col) {
+  if (sortKey === col) { sortDir *= -1; }
+  else { sortKey = col; sortDir = col === 'strategy' ? 1 : -1; }
+  updateSortHeaders();
+  sortAndRender();
+}
+
+function updateSortHeaders() {
+  document.querySelectorAll('th[data-col]').forEach(th => {
+    const col = th.dataset.col;
+    const icon = th.querySelector('.sort-icon');
+    if (col === sortKey) {
+      th.setAttribute('data-sorted', '');
+      icon.textContent = sortDir === -1 ? ' ↓' : ' ↑';
+    } else {
+      th.removeAttribute('data-sorted');
+      icon.textContent = ' ⇅';
+    }
+  });
+}
+
+function sortAndRender() {
+  displayed = [...filtered].sort((a, b) => {
+    const av = a[sortKey], bv = b[sortKey];
+    if (typeof av === 'string') return sortDir * av.localeCompare(bv);
+    return sortDir * (bv - av);
+  });
+  document.getElementById('sc-count').textContent =
+    `Exibindo ${displayed.length} de ${allApproved.length} aprovados`;
+  renderTable(displayed);
+}
+
+// ── Table ─────────────────────────────────────────────────────────────────
+const SKIP = new Set(['strategy','trades','wr','pf','roi','tpd','max_dd','approved']);
+
+function renderTable(rows) {
+  const asset = document.getElementById('sc-asset').value;
+  const tbody = document.getElementById('sc-tbody');
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="9" class="empty-state"><p>Nenhum resultado para os filtros atuais</p></td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map((r, idx) => {
+    const wrCls  = r.wr >= 0.55 ? 'pnl-positive' : '';
+    const roiCls = r.roi > 0 ? 'pnl-positive' : 'pnl-negative';
+    const pfCls  = r.pf >= 1.2 ? 'pnl-positive' : '';
+    const ddCls  = r.max_dd > 20 ? 'pnl-negative' : '';
+    const applyBtn = `<button class="btn" style="padding:4px 10px;font-size:0.75rem;cursor:pointer;"
+           data-row-idx="${idx}">Aplicar</button>`;
+    return `<tr>
+      <td style="white-space:nowrap">${r.strategy.replace(/_/g,' ')}</td>
+      <td style="font-size:0.78rem;color:#64748B;max-width:320px;white-space:normal;line-height:1.6;">${fmtParams(r)}</td>
+      <td>${r.trades}</td>
+      <td class="${wrCls}">${(r.wr*100).toFixed(1)}%</td>
+      <td class="${roiCls}">${r.roi > 0?'+':''}${r.roi}%</td>
+      <td class="${pfCls}">${r.pf.toFixed(2)}</td>
+      <td>${r.tpd.toFixed(1)}</td>
+      <td class="${ddCls}">${r.max_dd.toFixed(1)}%</td>
+      <td>${applyBtn}</td>
+    </tr>`;
+  }).join('');
+
+  // Wire up apply buttons using event delegation — robusto contra escapes de JSON em inline onclick
+  tbody.querySelectorAll('button[data-row-idx]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const idx = parseInt(btn.dataset.rowIdx, 10);
+      const row = displayed[idx];
+      if (!row) {
+        console.error('Linha não encontrada idx=', idx);
+        return;
+      }
+      openModal(asset, row);
+    });
+  });
+}
+
+function fmtParams(r) {
+  return Object.entries(r).filter(([k]) => !SKIP.has(k))
+    .map(([k, v]) => `<span style="color:#94A3B8">${k}</span>=<span style="color:#E2E8F0">${v}</span>`)
+    .join(' <span style="color:#1E3A5F">·</span> ');
+}
+
+// ── Apply modal ───────────────────────────────────────────────────────────
+function slugify(s) {
+  return (s || '').trim().toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 24);
+}
+
+function computeInstanceName(strategy, asset, tag, tf) {
+  const slug = slugify(tag);
+  const base = strategy.toLowerCase() + '_' + asset.toLowerCase() + '_' + (tf || '5m');
+  return slug ? (base + '_' + slug) : base;
+}
+
+function defaultTagFromRow(row) {
+  // Pré-fill no formato WR/ROI/TPD — ex: 57/36/5.1
+  // wr vem em decimal (0.576), roi em % (36.8), tpd em /dia (5.1)
+  const wr  = row.wr  != null ? Math.round(row.wr * 100)  : '?';
+  const roi = row.roi != null ? Math.round(row.roi)       : '?';
+  const tpd = row.tpd != null ? Number(row.tpd).toFixed(1) : '?';
+  return `${wr}/${roi}/${tpd}`;
+}
+
+function openModal(asset, row) {
+  const defaultTag = defaultTagFromRow(row);
+  const tf = row.tf || document.getElementById('sc-tf').value || '5m';
+  pendingApply = {asset, strategy: row.strategy, params: row, tag: defaultTag, timeframe: tf};
+  document.getElementById('modal-tag').value = defaultTag;
+  document.getElementById('modal-instance').textContent = computeInstanceName(row.strategy, asset, defaultTag, tf);
+  const params = Object.fromEntries(Object.entries(row).filter(([k]) => !SKIP.has(k)));
+  document.getElementById('modal-params').textContent = JSON.stringify(params, null, 2);
+  document.getElementById('sc-modal').style.display = 'flex';
+}
+
+function onTagInput() {
+  if (!pendingApply) return;
+  const tag = document.getElementById('modal-tag').value;
+  pendingApply.tag = tag;
+  document.getElementById('modal-instance').textContent =
+    computeInstanceName(pendingApply.strategy, pendingApply.asset, tag, pendingApply.timeframe);
+}
+
+function closeModal() {
+  document.getElementById('sc-modal').style.display = 'none';
+  pendingApply = null;
+}
+
+async function confirmApply() {
+  if (!pendingApply) return;
+  const payload = pendingApply;     // captura antes de closeModal() zerar
+  closeModal();
+  try {
+    const res  = await fetch('/api/scanner/apply', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (data.ok) { showToast('✓ Aplicado em ' + data.instance, false); }
+    else { showToast('✗ ' + (data.error || 'Falha ao aplicar'), true); }
+  } catch(e) { showToast('✗ Erro de rede: ' + e.message, true); }
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────
+function showError(msg) {
+  document.getElementById('sc-loading').style.display = 'none';
+  const el = document.getElementById('sc-error');
+  el.textContent = msg; el.style.display = 'block';
+}
+
+function showToast(msg, isError = false) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.toggle('error', isError);
+  t.classList.add('show');
+  setTimeout(() => { t.classList.remove('show'); t.classList.remove('error'); }, 4000);
+}
+</script>
+{% endblock %}

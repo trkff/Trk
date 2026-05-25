@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}Sinais{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1 class="page-title">Sinais</h1>
+  <p class="page-subtitle">Todos os sinais detectados &mdash; executados e bloqueados</p>
+</div>
+
+<div style="margin-bottom:16px;display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;">
+  <div>
+    <label style="display:block;font-size:0.78rem;color:var(--text-secondary);margin-bottom:4px;">Estrat&eacute;gia</label>
+    <select id="filter-strategy" onchange="loadSignals()" style="background:var(--bg-card);border:1px solid var(--border);color:var(--text-primary);padding:6px 10px;border-radius:var(--radius);font-size:0.85rem;">
+      <option value="">Todas</option>
+    </select>
+  </div>
+</div>
+
+<div class="table-container">
+  <table>
+    <thead>
+      <tr>
+        <th>Hor&aacute;rio</th><th>Estrat&eacute;gia</th><th>Ativo</th><th>Side</th><th>Status</th>
+        <th>RSI2</th><th>EMA9</th><th>EMA21</th><th>Volume</th><th>Vol M&eacute;d</th>
+        <th>ATR</th><th>Funding</th><th>Motivo</th>
+      </tr>
+    </thead>
+    <tbody id="signals-body">
+      <tr><td colspan="13" class="empty-state"><p>Carregando...</p></td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div id="toast" class="toast"></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const STRATEGY_COLORS = {
+  mean_reversion: 'var(--accent-blue)',
+  funding_arb: 'var(--accent-yellow)',
+  order_flow: 'var(--accent-purple)',
+};
+
+async function loadSignals() {
+  const strategy = document.getElementById('filter-strategy')?.value || '';
+  const url = '/api/signals?limit=200' + (strategy ? '&strategy=' + strategy : '');
+  const signals = await apiGet(url);
+  if (!signals) return;
+  const body = document.getElementById('signals-body');
+  if (!signals.length) {
+    body.innerHTML = '<tr><td colspan="13" class="empty-state"><p>Nenhum sinal detectado ainda</p></td></tr>';
+    return;
+  }
+  body.innerHTML = signals.map(s => {
+    const strat = s.strategy_name || 'mean_reversion';
+    const color = STRATEGY_COLORS[strat] || 'var(--text-muted)';
+    return `<tr>
+      <td>${formatTime(s.timestamp)}</td>
+      <td><span style="font-size:0.75rem;padding:2px 6px;border-radius:4px;background:${color};color:#fff;opacity:0.9;white-space:nowrap;">${strat}</span></td>
+      <td>${s.asset}</td>
+      <td class="${sideClass(s.side)}">${s.side.toUpperCase()}</td>
+      <td><span class="tag ${s.executed ? 'tag-executed' : 'tag-blocked'}">${s.executed ? 'Executado' : 'Bloqueado'}</span></td>
+      <td>${s.rsi2 != null ? s.rsi2.toFixed(1) : '--'}</td>
+      <td>${s.ema9 != null ? s.ema9.toFixed(2) : '--'}</td>
+      <td>${s.ema21 != null ? s.ema21.toFixed(2) : '--'}</td>
+      <td>${s.volume != null ? s.volume.toFixed(1) : '--'}</td>
+      <td>${s.volume_avg != null ? s.volume_avg.toFixed(1) : '--'}</td>
+      <td>${s.atr != null ? s.atr.toFixed(4) : '--'}</td>
+      <td>${s.funding_rate != null ? (s.funding_rate * 100).toFixed(4) + '%' : '--'}</td>
+      <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;" title="${s.reason || ''}">${s.reason || '--'}</td>
+    </tr>`;
+  }).join('');
+}
+
+async function initStrategyFilter() {
+  const strategies = await apiGet('/api/strategies');
+  if (!strategies) return;
+  const sel = document.getElementById('filter-strategy');
+  strategies
+    .filter(s => s.enabled)
+    .forEach(s => {
+      const opt = document.createElement('option');
+      opt.value = s.name;
+      opt.textContent = s.display_name;
+      sel.appendChild(opt);
+    });
+}
+
+initStrategyFilter();
+loadSignals();
+setInterval(loadSignals, 10000);
+</script>
+{% endblock %}

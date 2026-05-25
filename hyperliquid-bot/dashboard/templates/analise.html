@@ -1,0 +1,329 @@
+{% extends "base.html" %}
+{% block title %}Análise{% endblock %}
+
+{% block head %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1 class="page-title">An&aacute;lise de Padr&otilde;es</h1>
+  <p class="page-subtitle">Cruza m&eacute;tricas do scanner com performance ao vivo para encontrar quais sinais predizem sucesso</p>
+</div>
+
+<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap;">
+  <div>
+    <label style="font-size:0.78rem;color:#94A3B8;margin-right:8px;">Alvo:</label>
+    <select id="target-select" style="background:#0F1923;border:1px solid #1E3A5F;color:#E2E8F0;padding:6px 10px;border-radius:6px;font-family:'JetBrains Mono',monospace;font-size:0.85rem;">
+      <option value="pnl">PnL ao vivo ($)</option>
+      <option value="pnl_per_trade" selected>PnL por trade ($)</option>
+    </select>
+  </div>
+  <div>
+    <label style="font-size:0.78rem;color:#94A3B8;margin-right:8px;">Min. trades fechados:</label>
+    <input type="number" id="min-trades" value="0" min="0" style="background:#0F1923;border:1px solid #1E3A5F;color:#E2E8F0;padding:6px 10px;border-radius:6px;width:80px;font-family:'JetBrains Mono',monospace;font-size:0.85rem;">
+  </div>
+  <span id="sample-info" style="color:#64748B;font-size:0.78rem;margin-left:auto;"></span>
+</div>
+
+<div id="empty-state" style="display:none;text-align:center;padding:48px;color:#64748B;">
+  <p>Nenhuma estrat&eacute;gia aplicada com m&eacute;tricas dispon&iacute;veis ainda.</p>
+</div>
+
+<!-- Timeframe Buckets -->
+<h2 class="chart-title" style="margin-bottom:12px;">Performance por Timeframe</h2>
+<p style="color:#64748B;font-size:0.78rem;margin-top:-8px;margin-bottom:12px;">
+  Agrega estrat&eacute;gias por timeframe e mostra o alvo m&eacute;dio ao vivo. Ajuda a ver se algum TF paga mais consistentemente.
+</p>
+<div style="background:#0F1923;border:1px solid #1E3A5F;border-radius:10px;padding:0;overflow-x:auto;margin-bottom:24px;">
+  <table id="tf-table" style="width:100%;border-collapse:collapse;font-size:0.85rem;">
+    <thead>
+      <tr style="background:#0A1018;text-align:left;">
+        <th style="padding:12px 16px;color:#64748B;font-weight:600;text-transform:uppercase;font-size:0.7rem;letter-spacing:0.05em;">Timeframe</th>
+        <th style="padding:12px 16px;color:#64748B;font-weight:600;text-transform:uppercase;font-size:0.7rem;letter-spacing:0.05em;">Estrat&eacute;gias</th>
+        <th style="padding:12px 16px;color:#64748B;font-weight:600;text-transform:uppercase;font-size:0.7rem;letter-spacing:0.05em;">Trades Total</th>
+        <th style="padding:12px 16px;color:#64748B;font-weight:600;text-transform:uppercase;font-size:0.7rem;letter-spacing:0.05em;">WR M&eacute;dio</th>
+        <th style="padding:12px 16px;color:#64748B;font-weight:600;text-transform:uppercase;font-size:0.7rem;letter-spacing:0.05em;">Alvo M&eacute;dio</th>
+        <th style="padding:12px 16px;color:#64748B;font-weight:600;text-transform:uppercase;font-size:0.7rem;letter-spacing:0.05em;">PnL Total ($)</th>
+        <th style="padding:12px 16px;color:#64748B;font-weight:600;text-transform:uppercase;font-size:0.7rem;letter-spacing:0.05em;">Compara&ccedil;&atilde;o</th>
+      </tr>
+    </thead>
+    <tbody id="tf-tbody"></tbody>
+  </table>
+</div>
+
+<!-- Correlation Table -->
+<h2 class="chart-title" style="margin-bottom:12px;">Correla&ccedil;&atilde;o (Pearson)</h2>
+<p style="color:#64748B;font-size:0.78rem;margin-top:-8px;margin-bottom:12px;">
+  Correla&ccedil;&atilde;o entre cada m&eacute;trica do scanner e o alvo selecionado. Valores pr&oacute;ximos de <span style="color:#10B981">+1</span> ou <span style="color:#EF4444">-1</span> indicam padr&atilde;o forte. <span style="color:#94A3B8">|r|&lt;0.2</span> = sem rela&ccedil;&atilde;o.
+</p>
+<div style="background:#0F1923;border:1px solid #1E3A5F;border-radius:10px;padding:0;overflow-x:auto;margin-bottom:24px;">
+  <table id="corr-table" style="width:100%;border-collapse:collapse;font-size:0.85rem;">
+    <thead>
+      <tr style="background:#0A1018;text-align:left;">
+        <th style="padding:12px 16px;color:#64748B;font-weight:600;text-transform:uppercase;font-size:0.7rem;letter-spacing:0.05em;">M&eacute;trica do Scanner</th>
+        <th style="padding:12px 16px;color:#64748B;font-weight:600;text-transform:uppercase;font-size:0.7rem;letter-spacing:0.05em;">Coef. r</th>
+        <th style="padding:12px 16px;color:#64748B;font-weight:600;text-transform:uppercase;font-size:0.7rem;letter-spacing:0.05em;">For&ccedil;a</th>
+        <th style="padding:12px 16px;color:#64748B;font-weight:600;text-transform:uppercase;font-size:0.7rem;letter-spacing:0.05em;">Interpreta&ccedil;&atilde;o</th>
+      </tr>
+    </thead>
+    <tbody id="corr-tbody"></tbody>
+  </table>
+</div>
+
+<!-- Scatter Plots -->
+<h2 class="chart-title" style="margin-bottom:12px;">Scatter Plots</h2>
+<p style="color:#64748B;font-size:0.78rem;margin-top:-8px;margin-bottom:12px;">
+  Cada ponto = uma estrat&eacute;gia. Eixo X = m&eacute;trica do scanner, eixo Y = alvo ao vivo. Verde = ganhando, vermelho = perdendo.
+</p>
+<div id="scatter-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(420px,1fr));gap:16px;"></div>
+
+<style>
+.corr-row td { padding:12px 16px;border-top:1px solid #1E3A5F; }
+.corr-name { color:#E2E8F0;font-family:'JetBrains Mono',monospace; }
+.corr-r { font-family:'JetBrains Mono',monospace;font-weight:600;font-size:1rem; }
+.corr-r.strong-pos { color:#10B981; }
+.corr-r.strong-neg { color:#EF4444; }
+.corr-r.weak { color:#94A3B8; }
+.corr-bar { display:inline-block;height:8px;background:#1E3A5F;border-radius:4px;overflow:hidden;width:100px;position:relative;vertical-align:middle; }
+.corr-bar-fill { position:absolute;top:0;height:100%;border-radius:4px; }
+.corr-bar-fill.pos { background:#10B981;left:50%; }
+.corr-bar-fill.neg { background:#EF4444;right:50%; }
+.scatter-card { background:#0F1923;border:1px solid #1E3A5F;border-radius:10px;padding:14px; }
+.scatter-card h3 { font-size:0.85rem;color:#E2E8F0;margin:0 0 4px;font-family:'JetBrains Mono',monospace; }
+.scatter-card .scatter-meta { font-size:0.7rem;color:#64748B;margin-bottom:8px; }
+</style>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const SCANNER_METRICS = [
+  { key: 'trades', label: 'Trades (backtest)', desc: 'Quantidade de trades no backtest.' },
+  { key: 'wr',     label: 'Win Rate (backtest)', desc: 'Win rate hist&oacute;rico (0&ndash;1).' },
+  { key: 'pf',     label: 'Profit Factor', desc: 'Ganhos / Perdas no backtest.' },
+  { key: 'roi',    label: 'ROI % (backtest)', desc: 'Retorno % no backtest.' },
+  { key: 'tpd',    label: 'Trades/Dia', desc: 'Frequ&ecirc;ncia m&eacute;dia.' },
+  { key: 'max_dd', label: 'Max Drawdown %', desc: 'Pior queda hist&oacute;rica.' },
+];
+
+let _data = [];
+let _charts = {};
+
+async function loadAnalise() {
+  const data = await apiGet('/api/analise') || [];
+  _data = Array.isArray(data) ? data : [];
+  render();
+}
+
+function getFiltered() {
+  const min = parseInt(document.getElementById('min-trades').value) || 0;
+  return _data.filter(d => (d.live.closed_total || 0) >= min);
+}
+
+function getTargetKey() { return document.getElementById('target-select').value; }
+
+function pearson(xs, ys) {
+  const n = xs.length;
+  if (n < 2) return null;
+  const mx = xs.reduce((a, b) => a + b, 0) / n;
+  const my = ys.reduce((a, b) => a + b, 0) / n;
+  let num = 0, dx = 0, dy = 0;
+  for (let i = 0; i < n; i++) {
+    const a = xs[i] - mx, b = ys[i] - my;
+    num += a * b; dx += a * a; dy += b * b;
+  }
+  if (dx === 0 || dy === 0) return null;
+  return num / Math.sqrt(dx * dy);
+}
+
+function pairs(metric, targetKey) {
+  const data = getFiltered();
+  const out = [];
+  for (const d of data) {
+    const x = d.scanner[metric];
+    const y = d.live[targetKey];
+    if (x == null || y == null || isNaN(x) || isNaN(y)) continue;
+    out.push({ x: Number(x), y: Number(y), label: d.name, asset: d.asset, tag: d.tag });
+  }
+  return out;
+}
+
+function interpretation(metric, r) {
+  if (r == null) return 'Dados insuficientes';
+  const abs = Math.abs(r);
+  const dir = r > 0 ? 'mais alto' : 'mais baixo';
+  if (abs < 0.2) return 'Sem rela&ccedil;&atilde;o clara &mdash; n&atilde;o use isso para escolher.';
+  if (abs < 0.4) return `Tend&ecirc;ncia fraca: ${metric} ${dir} associa-se a melhor desempenho.`;
+  if (abs < 0.7) return `Tend&ecirc;ncia moderada: prefira ${metric} ${dir}.`;
+  return `Forte indicador: ${metric} ${dir} = sucesso prov&aacute;vel.`;
+}
+
+function renderTimeframeTable() {
+  const target = getTargetKey();
+  const data = getFiltered();
+  const tbody = document.getElementById('tf-tbody');
+
+  // Group by timeframe
+  const groups = {};
+  for (const d of data) {
+    const tf = d.timeframe || '5m';
+    if (!groups[tf]) groups[tf] = [];
+    groups[tf].push(d);
+  }
+
+  // Compute aggregates
+  const rows = Object.entries(groups).map(([tf, items]) => {
+    const totalTrades = items.reduce((s, d) => s + (d.live.closed_total || 0), 0);
+    const totalPnl = items.reduce((s, d) => s + (d.live.pnl || 0), 0);
+    const wrItems = items.filter(d => (d.live.closed_total || 0) > 0);
+    const avgWr = wrItems.length ? wrItems.reduce((s, d) => s + (d.live.win_rate || 0), 0) / wrItems.length : null;
+    const tgtItems = items.filter(d => d.live[target] != null);
+    const avgTarget = tgtItems.length ? tgtItems.reduce((s, d) => s + d.live[target], 0) / tgtItems.length : null;
+    return { tf, count: items.length, totalTrades, avgWr, avgTarget, totalPnl };
+  });
+
+  // Sort by avgTarget desc (best first)
+  rows.sort((a, b) => (b.avgTarget ?? -Infinity) - (a.avgTarget ?? -Infinity));
+
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="7" style="padding:24px;text-align:center;color:#64748B;">Sem dados</td></tr>';
+    return;
+  }
+
+  // For comparison bar — find max abs avgTarget for scaling
+  const maxAbs = Math.max(...rows.map(r => Math.abs(r.avgTarget ?? 0))) || 1;
+
+  tbody.innerHTML = rows.map((r, idx) => {
+    const wrStr = r.avgWr == null ? '—' : r.avgWr.toFixed(1) + '%';
+    const wrCls = r.avgWr == null ? '' : (r.avgWr >= 50 ? 'strong-pos' : 'strong-neg');
+    const tgtStr = r.avgTarget == null ? '—' : (r.avgTarget >= 0 ? '+' : '') + '$' + r.avgTarget.toFixed(2);
+    const tgtCls = r.avgTarget == null ? 'weak' : (r.avgTarget >= 0 ? 'strong-pos' : 'strong-neg');
+    const pnlStr = (r.totalPnl >= 0 ? '+' : '') + '$' + r.totalPnl.toFixed(2);
+    const pnlCls = r.totalPnl >= 0 ? 'strong-pos' : 'strong-neg';
+    const pct = r.avgTarget == null ? 0 : Math.min(50, Math.abs(r.avgTarget) / maxAbs * 50);
+    const bar = r.avgTarget == null ? '' : `<div class="corr-bar"><div class="corr-bar-fill ${r.avgTarget >= 0 ? 'pos' : 'neg'}" style="width:${pct}%"></div></div>`;
+    const medal = idx === 0 && r.avgTarget != null && r.avgTarget > 0 ? ' 🏆' : '';
+    return `
+      <tr class="corr-row">
+        <td><span class="corr-name" style="font-size:1rem;font-weight:600;">${r.tf}${medal}</span></td>
+        <td style="color:#E2E8F0;">${r.count}</td>
+        <td style="color:#E2E8F0;">${r.totalTrades}</td>
+        <td><span class="corr-r ${wrCls}">${wrStr}</span></td>
+        <td><span class="corr-r ${tgtCls}">${tgtStr}</span></td>
+        <td><span class="corr-r ${pnlCls}">${pnlStr}</span></td>
+        <td>${bar}</td>
+      </tr>
+    `;
+  }).join('');
+}
+
+function renderCorrTable() {
+  const target = getTargetKey();
+  const tbody = document.getElementById('corr-tbody');
+  const rows = SCANNER_METRICS.map(m => {
+    const pts = pairs(m.key, target);
+    const r = pearson(pts.map(p => p.x), pts.map(p => p.y));
+    return { m, r, n: pts.length };
+  });
+  rows.sort((a, b) => (Math.abs(b.r ?? -1) - Math.abs(a.r ?? -1)));
+  tbody.innerHTML = rows.map(({ m, r, n }) => {
+    const cls = r == null ? 'weak' : (Math.abs(r) < 0.2 ? 'weak' : (r > 0 ? 'strong-pos' : 'strong-neg'));
+    const rStr = r == null ? '—' : (r > 0 ? '+' : '') + r.toFixed(3);
+    const pct = r == null ? 0 : Math.min(50, Math.abs(r) * 50);
+    const bar = r == null ? '' : `<div class="corr-bar"><div class="corr-bar-fill ${r > 0 ? 'pos' : 'neg'}" style="width:${pct}%"></div></div>`;
+    return `
+      <tr class="corr-row">
+        <td><span class="corr-name">${m.label}</span><div style="font-size:0.7rem;color:#64748B;margin-top:2px;">${m.desc} <span style="opacity:0.6">(n=${n})</span></div></td>
+        <td><span class="corr-r ${cls}">${rStr}</span></td>
+        <td>${bar}</td>
+        <td style="color:#94A3B8;font-size:0.8rem;">${interpretation(m.label, r)}</td>
+      </tr>
+    `;
+  }).join('');
+}
+
+function renderScatters() {
+  const target = getTargetKey();
+  const targetLabel = target === 'pnl' ? 'PnL ao vivo ($)' : 'PnL por trade ($)';
+  const grid = document.getElementById('scatter-grid');
+
+  // Destroy old charts
+  Object.values(_charts).forEach(c => c.destroy());
+  _charts = {};
+
+  grid.innerHTML = SCANNER_METRICS.map(m => `
+    <div class="scatter-card">
+      <h3>${m.label} <span style="color:#64748B;">vs</span> ${targetLabel}</h3>
+      <div class="scatter-meta" id="scatter-meta-${m.key}"></div>
+      <canvas id="scatter-${m.key}" height="200"></canvas>
+    </div>
+  `).join('');
+
+  for (const m of SCANNER_METRICS) {
+    const pts = pairs(m.key, target);
+    const r = pearson(pts.map(p => p.x), pts.map(p => p.y));
+    const meta = document.getElementById(`scatter-meta-${m.key}`);
+    meta.innerHTML = `r = <span style="color:${r == null || Math.abs(r) < 0.2 ? '#94A3B8' : (r > 0 ? '#10B981' : '#EF4444')};font-weight:600;">${r == null ? '—' : (r > 0 ? '+' : '') + r.toFixed(3)}</span> · n=${pts.length}`;
+
+    const ctx = document.getElementById(`scatter-${m.key}`).getContext('2d');
+    _charts[m.key] = new Chart(ctx, {
+      type: 'scatter',
+      data: {
+        datasets: [{
+          data: pts.map(p => ({ x: p.x, y: p.y, _label: p.label, _asset: p.asset, _tag: p.tag })),
+          backgroundColor: pts.map(p => p.y >= 0 ? 'rgba(16,185,129,0.7)' : 'rgba(239,68,68,0.7)'),
+          borderColor: pts.map(p => p.y >= 0 ? '#10B981' : '#EF4444'),
+          borderWidth: 1,
+          pointRadius: 6,
+          pointHoverRadius: 8,
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: ctx => {
+                const d = ctx.raw;
+                const chip = d._asset ? ` [${d._asset}]` : '';
+                const tag = d._tag ? ` ·${d._tag}` : '';
+                return `${d._label}${chip}${tag}  (${m.label}=${d.x}, ${targetLabel.split(' ')[0]}=${typeof d.y === 'number' ? d.y.toFixed(2) : d.y})`;
+              },
+            },
+          },
+        },
+        scales: {
+          x: { title: { display: true, text: m.label, color: '#64748B' }, ticks: { color: '#94A3B8' }, grid: { color: 'rgba(30,58,95,0.4)' } },
+          y: { title: { display: true, text: targetLabel, color: '#64748B' }, ticks: { color: '#94A3B8' }, grid: { color: 'rgba(30,58,95,0.4)' } },
+        },
+      },
+    });
+  }
+}
+
+function render() {
+  const filtered = getFiltered();
+  const empty = document.getElementById('empty-state');
+  if (!_data.length) {
+    empty.style.display = 'block';
+    document.getElementById('scatter-grid').innerHTML = '';
+    document.getElementById('corr-tbody').innerHTML = '';
+    document.getElementById('sample-info').textContent = '';
+    return;
+  }
+  empty.style.display = 'none';
+  document.getElementById('sample-info').textContent = `${filtered.length} estrat&eacute;gia(s) na an&aacute;lise (de ${_data.length} aplicadas)`;
+  renderTimeframeTable();
+  renderCorrTable();
+  renderScatters();
+}
+
+document.getElementById('target-select').addEventListener('change', render);
+document.getElementById('min-trades').addEventListener('input', render);
+
+loadAnalise();
+setInterval(loadAnalise, 15000);
+</script>
+{% endblock %}

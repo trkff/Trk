@@ -1,0 +1,255 @@
+{% extends "base.html" %}
+{% block title %}Trades{% endblock %}
+{% block head %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1 class="page-title">Trades</h1>
+  <p class="page-subtitle">Hist&oacute;rico completo de opera&ccedil;&otilde;es</p>
+</div>
+
+<!-- Filters -->
+<div class="filters">
+  <div class="filter-group">
+    <span class="filter-label">Ativo</span>
+    <input type="text" id="f-asset" placeholder="Ex: BTC" style="width:100px">
+  </div>
+  <div class="filter-group">
+    <span class="filter-label">Side</span>
+    <select id="f-side" style="width:100px">
+      <option value="">Todos</option>
+      <option value="long">Long</option>
+      <option value="short">Short</option>
+    </select>
+  </div>
+  <div class="filter-group">
+    <span class="filter-label">Estrat&eacute;gia</span>
+    <select id="f-strategy" style="width:180px">
+      <option value="">Todas</option>
+      <option value="bb_reversion">BB Reversion (5m)</option>
+      <option value="bb_stoch">BB + Stoch (5m)</option>
+    </select>
+  </div>
+  <div class="filter-group">
+    <span class="filter-label">De</span>
+    <input type="date" id="f-from">
+  </div>
+  <div class="filter-group">
+    <span class="filter-label">At&eacute;</span>
+    <input type="date" id="f-to">
+  </div>
+  <div class="filter-group" style="align-self:flex-end;">
+    <button class="btn btn-primary" onclick="loadTrades()" style="cursor:pointer">Filtrar</button>
+  </div>
+</div>
+
+<!-- Trades table -->
+<div class="table-container" style="margin-bottom:24px;">
+  <table>
+    <thead>
+      <tr>
+        <th>Data</th><th>Ativo</th><th>Side</th><th>Estrat&eacute;gia</th><th>Entry</th><th>Exit</th><th>Size</th>
+        <th>P&amp;L ($)</th><th>Fees</th><th>Funding</th><th>P&amp;L (%)</th><th>Dura&ccedil;&atilde;o</th><th>Status</th>
+      </tr>
+    </thead>
+    <tbody id="trades-body">
+      <tr><td colspan="13" class="empty-state"><p>Carregando...</p></td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- Charts side by side -->
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+  <div class="chart-container">
+    <div class="chart-title">P&amp;L Acumulado</div>
+    <div class="chart-wrap"><canvas id="chart-cumulative"></canvas></div>
+  </div>
+  <div class="chart-container">
+    <div class="chart-title">Distribui&ccedil;&atilde;o de Resultados</div>
+    <div class="chart-wrap"><canvas id="chart-histogram"></canvas></div>
+  </div>
+</div>
+
+<div id="toast" class="toast"></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const STRATEGY_LABELS = {
+  bb_reversion: 'BB Reversion (5m)',
+  bb_stoch: 'BB + Stoch (5m)',
+};
+
+let cumulativeChart, histogramChart;
+
+async function loadTrades() {
+  const params = new URLSearchParams();
+  const asset = document.getElementById('f-asset').value;
+  const side = document.getElementById('f-side').value;
+  const from = document.getElementById('f-from').value;
+  const to = document.getElementById('f-to').value;
+  const strategy = document.getElementById('f-strategy').value;
+  if (asset) params.set('asset', asset);
+  if (side) params.set('side', side);
+  if (from) params.set('date_from', from);
+  if (to) params.set('date_to', to);
+  if (strategy) params.set('strategy', strategy);
+
+  const trades = await apiGet('/api/trades?' + params);
+  if (!trades) return;
+  renderTrades(trades);
+}
+
+function renderTrades(trades) {
+  const body = document.getElementById('trades-body');
+  if (!trades.length) {
+    body.innerHTML = '<tr><td colspan="13" class="empty-state"><p>Nenhum trade encontrado</p></td></tr>';
+    return;
+  }
+  body.innerHTML = trades.map(t => {
+    const dur = t.entry_time && t.exit_time ? calcDuration(t.entry_time, t.exit_time) : '--';
+    const fees = t.fees != null ? '-$' + Math.abs(parseFloat(t.fees)).toFixed(4) : '--';
+    const funding = t.funding != null ? formatPnl(t.funding) : '--';
+    const fundingClass = t.funding > 0 ? 'pnl-positive' : t.funding < 0 ? 'pnl-negative' : '';
+    const date = t.entry_time ? formatTime(t.entry_time) : '--';
+    return `<tr>
+      <td>${date}</td>
+      <td>${t.asset}</td>
+      <td class="${sideClass(t.side)}">${t.side.toUpperCase()}</td>
+      <td><span class="tag">${STRATEGY_LABELS[t.strategy] || (t.strategy || 'mean_reversion').replace(/_/g, ' ')}</span></td>
+      <td>$${parseFloat(t.entry_price).toFixed(2)}</td>
+      <td>${t.exit_price ? '$' + parseFloat(t.exit_price).toFixed(2) : '--'}</td>
+      <td>${t.size}</td>
+      <td class="${t.pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}">${t.pnl != null ? formatPnl(t.pnl) : '--'}</td>
+      <td class="pnl-negative">${fees}</td>
+      <td class="${fundingClass}">${funding}</td>
+      <td class="${t.pnl_pct >= 0 ? 'pnl-positive' : 'pnl-negative'}">${t.pnl_pct != null ? formatPnl(t.pnl_pct) + '%' : '--'}</td>
+      <td>${dur}</td>
+      <td><span class="tag tag-${t.status}">${t.status}</span></td>
+    </tr>`;
+  }).join('');
+}
+
+function calcDuration(start, end) {
+  const ms = new Date(end) - new Date(start);
+  const mins = Math.floor(ms / 60000);
+  if (mins < 60) return mins + 'm';
+  const hrs = Math.floor(mins / 60);
+  return hrs + 'h ' + (mins % 60) + 'm';
+}
+
+async function loadCharts() {
+  const [cumData, distData] = await Promise.all([
+    apiGet('/api/trades/cumulative-pnl'),
+    apiGet('/api/trades/pnl-distribution'),
+  ]);
+
+  // Cumulative PnL line chart
+  const ctx1 = document.getElementById('chart-cumulative').getContext('2d');
+  if (cumulativeChart) cumulativeChart.destroy();
+  const labels = (cumData || []).map(d => formatTimeShort(d.exit_time));
+  const values = (cumData || []).map(d => d.cumulative_pnl);
+  cumulativeChart = new Chart(ctx1, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        label: 'P&L Acumulado ($)',
+        data: values,
+        borderColor: '#3B82F6',
+        backgroundColor: 'rgba(59,130,246,0.1)',
+        fill: true,
+        tension: 0.3,
+        pointRadius: 2,
+        borderWidth: 2,
+      }]
+    },
+    options: chartOpts('$'),
+  });
+
+  // PnL distribution histogram
+  const ctx2 = document.getElementById('chart-histogram').getContext('2d');
+  if (histogramChart) histogramChart.destroy();
+  const bins = buildHistogramBins(distData || []);
+  histogramChart = new Chart(ctx2, {
+    type: 'bar',
+    data: {
+      labels: bins.labels,
+      datasets: [{
+        label: 'Trades',
+        data: bins.counts,
+        backgroundColor: bins.colors,
+        borderRadius: 3,
+      }]
+    },
+    options: {
+      ...chartOpts(''),
+      plugins: { legend: { display: false } },
+    },
+  });
+}
+
+function buildHistogramBins(values) {
+  if (!values.length) return { labels: [], counts: [], colors: [] };
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const range = max - min || 1;
+  const binCount = Math.min(15, Math.max(5, Math.ceil(Math.sqrt(values.length))));
+  const binSize = range / binCount;
+
+  const counts = new Array(binCount).fill(0);
+  const labels = [];
+  const colors = [];
+
+  for (let i = 0; i < binCount; i++) {
+    const lo = min + i * binSize;
+    const hi = lo + binSize;
+    labels.push(lo.toFixed(1));
+    colors.push(lo >= 0 ? '#10B981' : '#EF4444');
+  }
+
+  for (const v of values) {
+    let idx = Math.floor((v - min) / binSize);
+    if (idx >= binCount) idx = binCount - 1;
+    counts[idx]++;
+  }
+
+  return { labels, counts, colors };
+}
+
+function chartOpts(prefix) {
+  return {
+    responsive: true,
+    maintainAspectRatio: false,
+    scales: {
+      x: {
+        ticks: { color: '#64748B', font: { family: "'JetBrains Mono'" } },
+        grid: { color: 'rgba(30,58,95,0.3)' },
+      },
+      y: {
+        ticks: {
+          color: '#64748B',
+          font: { family: "'JetBrains Mono'" },
+          callback: v => prefix + v,
+        },
+        grid: { color: 'rgba(30,58,95,0.3)' },
+      },
+    },
+    plugins: {
+      legend: { labels: { color: '#94A3B8', font: { family: "'JetBrains Mono'" } } },
+      tooltip: {
+        backgroundColor: '#1A2332',
+        titleColor: '#E2E8F0',
+        bodyColor: '#94A3B8',
+        borderColor: '#1E3A5F',
+        borderWidth: 1,
+      },
+    },
+  };
+}
+
+loadTrades();
+loadCharts();
+</script>
+{% endblock %}

@@ -1,0 +1,265 @@
+{% extends "base.html" %}
+{% block title %}Configura&ccedil;&otilde;es{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1 class="page-title">Configura&ccedil;&otilde;es</h1>
+  <p class="page-subtitle">Configura&ccedil;&atilde;o completa do bot e par&acirc;metros de opera&ccedil;&atilde;o</p>
+</div>
+
+<!-- Exchange selector -->
+<div class="config-section">
+  <div class="config-section-title">Exchange</div>
+  <div class="config-grid">
+    <div class="config-field">
+      <label for="cfg-exchange">Exchange Ativa</label>
+      <select id="cfg-exchange" onchange="onExchangeChange(this.value)" style="background:var(--bg-input,#1a1a2e);color:var(--text-primary);border:1px solid var(--border);border-radius:var(--radius);padding:8px 12px;font-size:0.9rem;width:100%;cursor:pointer;">
+        <option value="hyperliquid">HyperLiquid</option>
+        <option value="lighter">Lighter (taxa zero)</option>
+      </select>
+    </div>
+  </div>
+</div>
+
+<!-- Credentials HyperLiquid -->
+<div class="config-section" id="section-hyperliquid">
+  <div class="config-section-title">Credenciais Hyperliquid</div>
+  <div class="config-grid">
+    <div class="config-field">
+      <label for="cfg-address">Account Address</label>
+      <input type="text" id="cfg-address" placeholder="0x..." autocomplete="off">
+    </div>
+    <div class="config-field">
+      <label for="cfg-secret">Secret Key (Private Key)</label>
+      <input type="password" id="cfg-secret" placeholder="0x..." autocomplete="off">
+      <button type="button" class="btn btn-outline" style="width:fit-content;margin-top:4px;cursor:pointer" onclick="togglePassword('cfg-secret', this)">Mostrar</button>
+    </div>
+  </div>
+</div>
+
+<!-- Credentials Lighter -->
+<div class="config-section" id="section-lighter" style="display:none;">
+  <div class="config-section-title">Credenciais Lighter</div>
+  <div class="config-grid">
+    <div class="config-field">
+      <label for="cfg-lighter-wallet">Wallet Address (L1)</label>
+      <input type="text" id="cfg-lighter-wallet" placeholder="0x..." autocomplete="off">
+    </div>
+    <div class="config-field">
+      <label for="cfg-lighter-pubkey">Public Key da API Key</label>
+      <input type="text" id="cfg-lighter-pubkey" placeholder="0x..." autocomplete="off">
+    </div>
+    <div class="config-field">
+      <label for="cfg-lighter-privkey">Private Key da API Key</label>
+      <input type="password" id="cfg-lighter-privkey" placeholder="0x..." autocomplete="off">
+      <button type="button" class="btn btn-outline" style="width:fit-content;margin-top:4px;cursor:pointer" onclick="togglePassword('cfg-lighter-privkey', this)">Mostrar</button>
+    </div>
+  </div>
+  <p style="font-size:0.78rem;color:var(--text-muted);margin-top:8px;">Registre sua API key em <strong>lighter.xyz</strong> antes de configurar aqui.</p>
+</div>
+
+<!-- Network & Assets -->
+<div class="config-section">
+  <div class="config-section-title">Rede & Ativos</div>
+  <div class="config-grid">
+    <div class="config-field">
+      <label>Rede</label>
+      <div class="toggle-wrap">
+        <input type="checkbox" id="cfg-testnet" class="toggle">
+        <span id="net-label">Testnet</span>
+      </div>
+    </div>
+    <div class="config-field">
+      <label for="cfg-assets">Ativos Monitorados (separar por v&iacute;rgula)</label>
+      <input type="text" id="cfg-assets" placeholder="BTC,ETH,SOL">
+    </div>
+  </div>
+</div>
+
+<!-- Risk Parameters -->
+<div class="config-section">
+  <div class="config-section-title">Gerenciamento de Risco</div>
+  <div class="config-grid">
+    <div class="config-field">
+      <label for="cfg-sizing-mode">Modo de Sizing</label>
+      <select id="cfg-sizing-mode">
+        <option value="risk_pct">% do capital (risk_pct)</option>
+        <option value="fixed">Valor fixo em USD</option>
+      </select>
+    </div>
+    <div class="config-field">
+      <label for="cfg-risk-pct">% Capital por Trade</label>
+      <input type="number" id="cfg-risk-pct" min="0.1" max="10" step="0.1">
+    </div>
+    <div class="config-field">
+      <label for="cfg-fixed-size">Valor Fixo por Trade (USD)</label>
+      <input type="number" id="cfg-fixed-size" min="0" step="1" placeholder="ex: 100">
+    </div>
+    <div class="config-field">
+      <label for="cfg-max-pos">M&aacute;x Posi&ccedil;&otilde;es Simult&acirc;neas</label>
+      <input type="number" id="cfg-max-pos" min="1" max="10" step="1">
+    </div>
+    <div class="config-field">
+      <label for="cfg-max-loss">M&aacute;x Perda Di&aacute;ria (%)</label>
+      <input type="number" id="cfg-max-loss" min="1" max="50" step="0.5">
+    </div>
+    <div class="config-field">
+      <label for="cfg-slippage">Slippage</label>
+      <input type="number" id="cfg-slippage" min="0.001" max="0.05" step="0.001">
+    </div>
+    <div class="config-field">
+      <label for="cfg-fee-rate">Taxa de Fee Round Trip</label>
+      <input type="number" id="cfg-fee-rate" min="0.0002" max="0.01" step="0.0001">
+    </div>
+  </div>
+</div>
+
+<!-- Debug & Control -->
+<div class="config-section">
+  <div class="config-section-title">Controle do Bot</div>
+  <div class="config-grid">
+    <div class="config-field">
+      <label>Log DEBUG</label>
+      <div class="toggle-wrap">
+        <input type="checkbox" id="cfg-debug" class="toggle">
+        <span>Ativar logs de debug</span>
+      </div>
+    </div>
+  </div>
+  <div class="btn-group" style="margin-top:20px;">
+    <button class="btn btn-success" onclick="botAction('start')" style="cursor:pointer">
+      <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+      Iniciar
+    </button>
+    <button class="btn btn-warning" onclick="botAction('pause')" style="cursor:pointer">
+      <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+      Pausar
+    </button>
+    <button class="btn btn-danger" onclick="botAction('stop')" style="cursor:pointer">
+      <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>
+      Parar
+    </button>
+  </div>
+</div>
+
+<!-- Save button -->
+<div style="margin-top:24px;display:flex;gap:12px;">
+  <button class="btn btn-primary" onclick="saveConfig()" style="cursor:pointer;font-size:0.9rem;padding:10px 32px;">
+    Salvar Configura&ccedil;&otilde;es
+  </button>
+</div>
+
+<div id="toast" class="toast"></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Fields saved by the top-level "Salvar Configurações" button
+const fieldMap = {
+  'cfg-address': 'account_address',
+  'cfg-secret': 'secret_key',
+  'cfg-lighter-wallet': 'lighter_wallet_address',
+  'cfg-lighter-pubkey': 'lighter_public_key',
+  'cfg-assets': 'monitored_assets',
+  'cfg-sizing-mode': 'sizing_mode',
+  'cfg-risk-pct': 'risk_pct_per_trade',
+  'cfg-fixed-size': 'fixed_trade_size_usd',
+  'cfg-max-pos': 'max_positions',
+  'cfg-max-loss': 'max_daily_loss_pct',
+  'cfg-slippage': 'slippage',
+  'cfg-fee-rate': 'fee_rate_round_trip',
+};
+
+function onExchangeChange(value) {
+  document.getElementById('section-hyperliquid').style.display = value === 'hyperliquid' ? '' : 'none';
+  document.getElementById('section-lighter').style.display = value === 'lighter' ? '' : 'none';
+}
+
+
+async function loadConfig() {
+  const cfg = await apiGet('/api/config');
+  if (!cfg) return;
+
+  for (const [elId, cfgKey] of Object.entries(fieldMap)) {
+    const el = document.getElementById(elId);
+    if (!el) continue;
+    if (cfgKey === 'monitored_assets') {
+      try { el.value = JSON.parse(cfg[cfgKey] || '[]').join(','); }
+      catch { el.value = cfg[cfgKey] || ''; }
+    } else {
+      el.value = cfg[cfgKey] || '';
+    }
+  }
+
+  document.getElementById('cfg-testnet').checked = (cfg.use_testnet || 'true') === 'true';
+  document.getElementById('cfg-debug').checked = (cfg.debug_logging || 'false') === 'true';
+  updateNetLabel();
+
+  const exchange = cfg.selected_exchange || 'hyperliquid';
+  document.getElementById('cfg-exchange').value = exchange;
+  onExchangeChange(exchange);
+
+  return cfg;
+}
+
+function updateNetLabel() {
+  const isTestnet = document.getElementById('cfg-testnet').checked;
+  document.getElementById('net-label').textContent = isTestnet ? 'Testnet' : 'MAINNET';
+  document.getElementById('net-label').style.color = isTestnet ? 'var(--accent-yellow)' : 'var(--accent-red)';
+}
+document.getElementById('cfg-testnet').addEventListener('change', updateNetLabel);
+
+async function saveConfig() {
+  const data = {};
+  for (const [elId, cfgKey] of Object.entries(fieldMap)) {
+    const el = document.getElementById(elId);
+    if (!el) continue;
+    if (cfgKey === 'monitored_assets') {
+      const arr = el.value.split(',').map(s => s.trim()).filter(Boolean);
+      data[cfgKey] = JSON.stringify(arr);
+    } else {
+      data[cfgKey] = el.value;
+    }
+  }
+  data.use_testnet = document.getElementById('cfg-testnet').checked ? 'true' : 'false';
+  data.debug_logging = document.getElementById('cfg-debug').checked ? 'true' : 'false';
+  data.selected_exchange = document.getElementById('cfg-exchange').value;
+  const privkey = document.getElementById('cfg-lighter-privkey')?.value;
+  if (privkey) data.lighter_private_key = privkey;
+
+  const res = await fetch('/api/config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  const json = await res.json();
+  if (json.ok) {
+    showToast('Configura\u00e7\u00f5es salvas com sucesso!');
+  } else {
+    showToast('Erro ao salvar: ' + (json.error || ''), true);
+  }
+}
+
+async function botAction(action) {
+  const res = await apiPost('/api/bot/' + action);
+  if (res && res.ok) {
+    showToast('Bot ' + action + ' \u2014 ' + (res.status || ''));
+    updateStatusIndicator(res.status);
+  } else {
+    showToast('Erro: ' + (res?.error || 'falha'), true);
+  }
+}
+
+function togglePassword(id, btn) {
+  const input = document.getElementById(id);
+  if (input.type === 'password') {
+    input.type = 'text';
+    btn.textContent = 'Ocultar';
+  } else {
+    input.type = 'password';
+    btn.textContent = 'Mostrar';
+  }
+}
+
+loadConfig();
+</script>
+{% endblock %}

@@ -1,0 +1,66 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip install *)",
+      "Bash(python *)",
+      "Bash(npm *)",
+      "Read",
+      "Edit",
+      "Bash(python3:*)",
+      "Bash(python:*)",
+      "Bash(netstat -ano)",
+      "Bash(findstr \":8080\")",
+      "Bash(findstr \"LISTENING\")",
+      "Bash(tasklist:*)",
+      "Bash(powershell -Command \"Get-Process -Id 20404 | Select-Object Name, Id, Path\")",
+      "Bash(powershell -Command \"Stop-Process -Id 20404 -Force; Write-Host 'Processo encerrado'\")",
+      "Bash(start python:*)",
+      "Bash(powershell -Command \"Start-Sleep 3; try { \\(Invoke-WebRequest -Uri 'http://localhost:8080' -TimeoutSec 5\\).StatusCode } catch { $_.Exception.Message }\")",
+      "Bash(powershell -Command \"Start-Sleep 3; \\(Invoke-WebRequest -Uri 'http://localhost:8080' -TimeoutSec 5\\).StatusCode\")",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:8080)",
+      "Bash(powershell -Command \"netstat -ano | Select-String ':8080.*LISTENING' | ForEach-Object { \\($_ -split '\\\\s+'\\)[-1] } | Get-Unique | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue; Write-Host \\\\\"Encerrado PID: $_\\\\\" }\")",
+      "Bash(powershell -Command \"\n\\\\$pid8080 = \\(Get-NetTCPConnection -LocalPort 8080 -State Listen -ErrorAction SilentlyContinue\\).OwningProcess\nif \\(\\\\$pid8080\\) {\n    Stop-Process -Id \\\\$pid8080 -Force\n    Write-Host \\\\\"Processo \\\\$pid8080 encerrado\\\\\"\n} else {\n    Write-Host 'Porta 8080 livre'\n}\n\")",
+      "Bash(powershell -Command \"\\(Invoke-WebRequest -Uri ''http://localhost:8080'' -TimeoutSec 5\\).StatusCode\")",
+      "Bash(pip show:*)",
+      "Bash(taskkill:*)",
+      "Bash(cmd.exe /c \"taskkill /PID 31012 /F\")",
+      "Bash(cmd.exe /c \"netstat -ano | findstr :8080\")",
+      "Bash(cmd.exe /c \"tasklist | findstr python\")",
+      "Bash(cmd.exe /c \"netstat -ano | findstr LISTENING\")",
+      "Bash(cmd.exe /c \"netstat -ano\")",
+      "Bash(cmd.exe /c \"netstat -ano > C:\\\\Temp\\\\ports.txt 2>&1\")",
+      "Read(//c/Temp/**)",
+      "Bash(cmd.exe /c \"tasklist | findstr /i node\")",
+      "Bash(cmd.exe /c \"tasklist | findstr /i pm2\")",
+      "Bash(cmd.exe /c \"pm2 list\")",
+      "Bash(where pm2:*)",
+      "Bash(where node:*)",
+      "Bash(pm2 list:*)",
+      "Bash(powershell -Command \"Get-NetTCPConnection -LocalPort 8080 -ErrorAction SilentlyContinue | Select-Object LocalAddress,LocalPort,State,OwningProcess\")",
+      "Bash(powershell -Command \"Get-Process -Id 31012 | Select-Object Id,Name,Path,StartTime\")",
+      "Bash(powershell -Command \"Stop-Process -Id 31012 -Force\")",
+      "Bash(powershell -Command \"Get-NetTCPConnection -LocalPort 8080 -ErrorAction SilentlyContinue\")",
+      "Bash(wc -l D:/Documentos/Trae/RazorHL/hyperliquid-bot/bot/*.py D:/Documentos/Trae/RazorHL/hyperliquid-bot/bot/strategies/*.py)",
+      "Skill(update-config)",
+      "Bash(jq:*)",
+      "Bash(python -c \":*)",
+      "Bash(pytest:*)",
+      "Skill(claude-md-management:revise-claude-md)",
+      "Bash(Get-ChildItem -Path \"D:\\\\Documentos\\\\Trae\\\\RazorHL\\\\hyperliquid-bot\\\\\" -Recurse -Force | Select-Object FullName | Sort-Object FullName)"
+    ],
+    "defaultMode": "bypassPermissions"
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python -c \"import sys,json; d=json.load(sys.stdin); p=d.get('tool_input',{}).get('file_path',''); is_py=p.endswith('.py') and 'hyperliquid-bot' in p and '__init__.py' not in p and '__pycache__' not in p; msg='[LEMBRETE AUTOMÁTICO] Um arquivo Python do projeto foi modificado. Se a mudança introduz novos módulos, altera a arquitetura, muda o schema do banco, adiciona/remove parâmetros de config ou afeta qualquer coisa documentada em hyperliquid-bot/CLAUDE.md — atualize o CLAUDE.md para refletir a mudança antes de finalizar.'; print(json.dumps({'hookSpecificOutput':{'hookEventName':'PostToolUse','additionalContext':msg}}) if is_py else '{}')\""
+          }
+        ]
+      }
+    ]
+  }
+}

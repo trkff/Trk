@@ -1,0 +1,347 @@
+{% extends "base.html" %}
+{% block title %}Ativos{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1 class="page-title">Ativos</h1>
+  <p class="page-subtitle">Baixe candles 5m dos mercados perp da Lighter para usar em backtest e scanner.</p>
+</div>
+
+<div class="card" style="margin-bottom:16px;">
+  <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+    <div style="display:flex;align-items:center;gap:8px;">
+      <span style="font-size:0.72rem;color:#64748B;text-transform:uppercase;letter-spacing:0.05em;">Intervalo:</span>
+      <div id="at-interval-tabs" class="at-tabs"></div>
+    </div>
+    <div style="font-size:0.85rem;color:#94A3B8;">
+      <span id="at-count-downloaded">0</span> baixados &middot;
+      <span id="at-count-available">0</span> dispon&iacute;veis
+    </div>
+    <button id="at-refresh" class="btn btn-secondary">Atualizar lista</button>
+  </div>
+</div>
+
+<div id="at-section-downloaded" style="margin-bottom:24px;">
+  <h2 style="font-size:1rem;color:#10B981;margin-bottom:12px;">Baixados</h2>
+  <div id="at-downloaded" class="at-grid"></div>
+</div>
+
+<div id="at-section-available">
+  <h2 style="font-size:1rem;color:#94A3B8;margin-bottom:12px;">Dispon&iacute;veis para baixar</h2>
+  <div class="at-table-wrap">
+    <table class="at-table">
+      <thead>
+        <tr>
+          <th class="at-th sortable" data-sort="symbol">S&iacute;mbolo</th>
+          <th class="at-th at-num sortable" data-sort="last_price">Pre&ccedil;o</th>
+          <th class="at-th at-num sortable" data-sort="volume_24h_usd">Vol 24h</th>
+          <th class="at-th at-num sortable" data-sort="open_interest_usd">Open Interest</th>
+          <th class="at-th at-num sortable" data-sort="price_change_24h_pct">&Delta;% 24h</th>
+          <th class="at-th at-num sortable" data-sort="daily_trades_count">Trades</th>
+          <th class="at-th"></th>
+        </tr>
+      </thead>
+      <tbody id="at-available-tbody"></tbody>
+    </table>
+    <div id="at-available-empty" class="at-empty" style="display:none;">Todos os ativos j&aacute; foram baixados.</div>
+  </div>
+</div>
+
+<div id="toast" class="toast"></div>
+
+<style>
+.at-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:12px; }
+.at-card { background:#0F1923; border:1px solid #1E3A5F; border-radius:10px; padding:14px; display:flex; flex-direction:column; gap:10px; }
+.at-card.downloaded { border-color:#1E5A3F; }
+.at-head { display:flex; justify-content:space-between; align-items:center; }
+.at-symbol { font-size:1rem; font-weight:600; color:#E2E8F0; font-family:'JetBrains Mono',monospace; }
+.at-mid { font-size:0.68rem; color:#64748B; font-family:'JetBrains Mono',monospace; }
+.at-stats { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; background:#0A1018; border-radius:6px; padding:8px; }
+.at-stat { display:flex; flex-direction:column; gap:2px; }
+.at-stat-label { font-size:0.6rem; color:#64748B; text-transform:uppercase; letter-spacing:0.05em; }
+.at-stat-value { font-size:0.78rem; color:#E2E8F0; font-family:'JetBrains Mono',monospace; }
+.at-actions { display:flex; gap:6px; }
+.at-btn { padding:6px 10px; border-radius:6px; border:1px solid #1E3A5F; background:#0A1018; color:#E2E8F0; font-size:0.78rem; cursor:pointer; }
+.at-btn:hover { border-color:#3B82F6; color:#93C5FD; }
+.at-btn:disabled { opacity:0.5; cursor:not-allowed; }
+.at-btn.primary { background:#1E3A5F; border-color:#3B82F6; color:#93C5FD; }
+.at-card .at-btn { flex:1; }
+.at-progress { font-size:0.7rem; color:#FBBF24; font-family:'JetBrains Mono',monospace; min-height:1em; }
+.at-empty { color:#64748B; font-size:0.85rem; padding:24px; text-align:center; background:#0F1923; border:1px dashed #1E3A5F; border-radius:8px; }
+
+.at-table-wrap { background:#0F1923; border:1px solid #1E3A5F; border-radius:10px; overflow:hidden; }
+.at-table { width:100%; border-collapse:collapse; font-family:'JetBrains Mono',monospace; font-size:0.8rem; }
+.at-th { text-align:left; padding:10px 12px; background:#0A1018; color:#94A3B8; font-weight:500; font-size:0.7rem; text-transform:uppercase; letter-spacing:0.05em; border-bottom:1px solid #1E3A5F; }
+.at-th.sortable { cursor:pointer; user-select:none; }
+.at-th.sortable:hover { color:#E2E8F0; }
+.at-th.sorted-asc::after  { content:" ▲"; color:#3B82F6; }
+.at-th.sorted-desc::after { content:" ▼"; color:#3B82F6; }
+.at-num { text-align:right; }
+.at-table tbody tr { border-bottom:1px solid #1E3A5F; }
+.at-table tbody tr:last-child { border-bottom:none; }
+.at-table tbody tr:hover { background:#15212F; }
+.at-table td { padding:8px 12px; color:#E2E8F0; }
+.at-cell-symbol { font-weight:600; }
+.at-cell-mid { font-size:0.65rem; color:#64748B; margin-left:6px; }
+.at-pos { color:#10B981; }
+.at-neg { color:#EF4444; }
+.at-row-progress { font-size:0.68rem; color:#FBBF24; }
+
+.at-tabs { display:flex; gap:4px; background:#0A1018; border:1px solid #1E3A5F; border-radius:8px; padding:3px; }
+.at-tab { padding:5px 14px; font-size:0.78rem; font-family:'JetBrains Mono',monospace; color:#94A3B8; background:transparent; border:none; border-radius:5px; cursor:pointer; }
+.at-tab:hover { color:#E2E8F0; }
+.at-tab.active { background:#1E3A5F; color:#93C5FD; }
+</style>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const fmtTs = (ms) => {
+  if (!ms) return "--";
+  const d = new Date(ms);
+  return d.toISOString().slice(0, 10);
+};
+
+const fmtRows = (n) => {
+  if (!n) return "0";
+  if (n >= 1000) return (n / 1000).toFixed(1) + "k";
+  return String(n);
+};
+
+const fmtPrice = (n) => {
+  if (!n) return "--";
+  if (n >= 1000) return n.toLocaleString("en-US", { maximumFractionDigits: 2 });
+  if (n >= 1)    return n.toFixed(3);
+  if (n >= 0.01) return n.toFixed(4);
+  return n.toPrecision(4);
+};
+
+const fmtUsd = (n) => {
+  if (!n) return "$0";
+  if (n >= 1e9) return "$" + (n / 1e9).toFixed(2) + "B";
+  if (n >= 1e6) return "$" + (n / 1e6).toFixed(2) + "M";
+  if (n >= 1e3) return "$" + (n / 1e3).toFixed(1) + "k";
+  return "$" + n.toFixed(2);
+};
+
+const fmtPct = (n) => {
+  if (n === null || n === undefined) return "--";
+  const sign = n >= 0 ? "+" : "";
+  return sign + n.toFixed(2) + "%";
+};
+
+const fmtInt = (n) => (n || 0).toLocaleString("en-US");
+
+const activeJobs = {}; // "symbol|interval" -> job_id
+let availableData = []; // disponíveis (não baixados) no intervalo atual
+let sortBy = "volume_24h_usd";
+let sortDir = "desc";
+let intervals = ["5m", "15m", "30m", "1h"];
+let currentInterval = "5m";
+
+function jobKey(symbol, interval) { return symbol + "|" + interval; }
+function isJobActive(symbol) { return !!activeJobs[jobKey(symbol, currentInterval)]; }
+
+function toast(msg, type) {
+  const t = document.getElementById("toast");
+  t.textContent = msg;
+  t.className = "toast show " + (type || "");
+  setTimeout(() => { t.className = "toast"; }, 3000);
+}
+
+// ── Tabs de intervalo ──────────────────────────────────────────────────
+function renderIntervalTabs() {
+  const wrap = document.getElementById("at-interval-tabs");
+  wrap.innerHTML = intervals.map(iv =>
+    '<button class="at-tab ' + (iv === currentInterval ? 'active' : '') + '" data-interval="' + iv + '">' + iv + '</button>'
+  ).join("");
+  wrap.querySelectorAll(".at-tab").forEach(b => {
+    b.addEventListener("click", () => {
+      if (b.dataset.interval === currentInterval) return;
+      currentInterval = b.dataset.interval;
+      renderIntervalTabs();
+      loadList();
+    });
+  });
+}
+
+// ── Cards (Baixados) ───────────────────────────────────────────────────
+function renderCard(item) {
+  const jobMsg = '<div class="at-progress" id="at-prog-' + item.symbol + '"></div>';
+  return (
+    '<div class="at-card downloaded">' +
+      '<div class="at-head">' +
+        '<span class="at-symbol">' + item.symbol + '</span>' +
+        '<span class="at-mid">id ' + item.market_id + ' &middot; ' + currentInterval + '</span>' +
+      '</div>' +
+      '<div class="at-stats">' +
+        '<div class="at-stat"><span class="at-stat-label">Rows</span><span class="at-stat-value">' + fmtRows(item.rows) + '</span></div>' +
+        '<div class="at-stat"><span class="at-stat-label">Desde</span><span class="at-stat-value">' + fmtTs(item.first_ts) + '</span></div>' +
+        '<div class="at-stat"><span class="at-stat-label">At&eacute;</span><span class="at-stat-value">' + fmtTs(item.last_ts) + '</span></div>' +
+      '</div>' +
+      jobMsg +
+      '<div class="at-actions">' +
+        '<button class="at-btn" data-symbol="' + item.symbol + '" ' +
+          (isJobActive(item.symbol) ? 'disabled' : '') + '>Atualizar</button>' +
+      '</div>' +
+    '</div>'
+  );
+}
+
+// ── Tabela (Disponíveis) ───────────────────────────────────────────────
+function renderAvailableTable() {
+  const tbody = document.getElementById("at-available-tbody");
+  const empty = document.getElementById("at-available-empty");
+  if (!availableData.length) {
+    tbody.innerHTML = "";
+    empty.style.display = "block";
+    return;
+  }
+  empty.style.display = "none";
+
+  const sorted = [...availableData].sort((a, b) => {
+    const av = a[sortBy], bv = b[sortBy];
+    if (typeof av === "string") {
+      return sortDir === "asc" ? av.localeCompare(bv) : bv.localeCompare(av);
+    }
+    return sortDir === "asc" ? (av - bv) : (bv - av);
+  });
+
+  tbody.innerHTML = sorted.map(item => {
+    const changeClass = item.price_change_24h_pct >= 0 ? "at-pos" : "at-neg";
+    const active = isJobActive(item.symbol);
+    const jobMsg = active
+      ? '<div class="at-row-progress" id="at-prog-' + item.symbol + '">baixando...</div>'
+      : '';
+    return (
+      '<tr>' +
+        '<td><span class="at-cell-symbol">' + item.symbol + '</span><span class="at-cell-mid">id ' + item.market_id + '</span></td>' +
+        '<td class="at-num">' + fmtPrice(item.last_price) + '</td>' +
+        '<td class="at-num">' + fmtUsd(item.volume_24h_usd) + '</td>' +
+        '<td class="at-num">' + fmtUsd(item.open_interest_usd) + '</td>' +
+        '<td class="at-num ' + changeClass + '">' + fmtPct(item.price_change_24h_pct) + '</td>' +
+        '<td class="at-num">' + fmtInt(item.daily_trades_count) + '</td>' +
+        '<td class="at-num">' +
+          '<button class="at-btn primary" data-symbol="' + item.symbol + '" ' +
+            (active ? 'disabled' : '') + '>Baixar ' + currentInterval + '</button>' +
+          jobMsg +
+        '</td>' +
+      '</tr>'
+    );
+  }).join("");
+
+  // sort headers visual state
+  document.querySelectorAll(".at-th.sortable").forEach(th => {
+    th.classList.remove("sorted-asc", "sorted-desc");
+    if (th.dataset.sort === sortBy) {
+      th.classList.add(sortDir === "asc" ? "sorted-asc" : "sorted-desc");
+    }
+  });
+
+  tbody.querySelectorAll(".at-btn[data-symbol]").forEach(btn => {
+    btn.addEventListener("click", () => startDownload(btn.dataset.symbol));
+  });
+}
+
+// ── Carregamento ───────────────────────────────────────────────────────
+async function loadList() {
+  const res = await fetch("/api/ativos?interval=" + encodeURIComponent(currentInterval));
+  if (!res.ok) {
+    toast("Falha ao carregar mercados", "error");
+    return;
+  }
+  const items = await res.json();
+  const downloaded = items.filter(i => i.has_csv && i.rows > 0);
+  availableData     = items.filter(i => !(i.has_csv && i.rows > 0));
+
+  document.getElementById("at-count-downloaded").textContent = downloaded.length;
+  document.getElementById("at-count-available").textContent  = availableData.length;
+
+  const dl = document.getElementById("at-downloaded");
+  dl.innerHTML = downloaded.length
+    ? downloaded.map(renderCard).join("")
+    : '<div class="at-empty">Nenhum ativo baixado ainda.</div>';
+
+  dl.querySelectorAll(".at-btn[data-symbol]").forEach(btn => {
+    btn.addEventListener("click", () => startDownload(btn.dataset.symbol));
+  });
+
+  renderAvailableTable();
+}
+
+async function startDownload(symbol) {
+  const interval = currentInterval;
+  const res = await fetch("/api/ativos/download", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ asset: symbol, interval: interval }),
+  });
+  if (!res.ok) {
+    toast("Falha ao iniciar download de " + symbol + " " + interval, "error");
+    return;
+  }
+  const { job_id } = await res.json();
+  activeJobs[jobKey(symbol, interval)] = job_id;
+  document.querySelectorAll('.at-btn[data-symbol="' + symbol + '"]').forEach(b => b.disabled = true);
+  const prog = document.getElementById("at-prog-" + symbol);
+  if (prog) prog.textContent = "iniciando...";
+  pollJob(symbol, interval, job_id);
+}
+
+async function pollJob(symbol, interval, jobId) {
+  try {
+    const res = await fetch("/api/ativos/download/" + jobId);
+    if (!res.ok) throw new Error("status fail");
+    const job = await res.json();
+    // só atualiza UI se ainda estiver na mesma tab
+    if (interval === currentInterval) {
+      const prog = document.getElementById("at-prog-" + symbol);
+      if (prog) prog.textContent = job.message || "";
+    }
+    if (job.status === "running") {
+      setTimeout(() => pollJob(symbol, interval, jobId), 1500);
+      return;
+    }
+    delete activeJobs[jobKey(symbol, interval)];
+    const label = symbol + " " + interval;
+    if (job.status === "done") {
+      toast(label + ": " + (job.message || "concluído"), "success");
+    } else {
+      toast(label + ": " + (job.message || "erro"), "error");
+    }
+    if (interval === currentInterval) await loadList();
+  } catch (e) {
+    delete activeJobs[jobKey(symbol, interval)];
+    toast("Erro no polling de " + symbol + " " + interval, "error");
+  }
+}
+
+// sort handlers
+document.querySelectorAll(".at-th.sortable").forEach(th => {
+  th.addEventListener("click", () => {
+    const col = th.dataset.sort;
+    if (sortBy === col) sortDir = sortDir === "asc" ? "desc" : "asc";
+    else { sortBy = col; sortDir = (col === "symbol") ? "asc" : "desc"; }
+    renderAvailableTable();
+  });
+});
+
+document.getElementById("at-refresh").addEventListener("click", loadList);
+
+// busca a lista de intervalos suportados antes de montar a UI
+(async () => {
+  try {
+    const r = await fetch("/api/ativos/intervals");
+    if (r.ok) {
+      const list = await r.json();
+      if (Array.isArray(list) && list.length) {
+        intervals = list;
+        if (!intervals.includes(currentInterval)) currentInterval = intervals[0];
+      }
+    }
+  } catch (e) { /* usa fallback */ }
+  renderIntervalTabs();
+  loadList();
+})();
+</script>
+{% endblock %}

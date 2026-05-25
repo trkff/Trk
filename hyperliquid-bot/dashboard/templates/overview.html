@@ -1,0 +1,330 @@
+{% extends "base.html" %}
+{% block title %}Overview{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1 class="page-title">Overview</h1>
+  <p class="page-subtitle">Vis&atilde;o geral do bot em tempo real</p>
+</div>
+
+<!-- KPI Cards -->
+<div class="card-grid" id="kpi-grid">
+  <div class="card kpi-card">
+    <span class="kpi-label">Status</span>
+    <span class="kpi-value" id="kpi-status">--</span>
+  </div>
+  <div class="card kpi-card">
+    <span class="kpi-label">P&amp;L Dia</span>
+    <span class="kpi-value" id="kpi-daily-pnl">$0.00</span>
+  </div>
+  <div class="card kpi-card">
+    <span class="kpi-label">P&amp;L Total</span>
+    <span class="kpi-value" id="kpi-total-pnl">$0.00</span>
+  </div>
+  <div class="card kpi-card">
+    <span class="kpi-label">Win Rate</span>
+    <span class="kpi-value" id="kpi-winrate">0%</span>
+  </div>
+  <div class="card kpi-card">
+    <span class="kpi-label">Trades Hoje</span>
+    <span class="kpi-value" id="kpi-today">0</span>
+  </div>
+</div>
+
+<!-- Strategy Stats -->
+<div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap;">
+  <h2 class="chart-title" style="margin:0;">Estrat&eacute;gias</h2>
+  <div id="strategy-filter-btns" style="display:flex;gap:6px;">
+    <button class="filter-btn active" data-days="">Tudo</button>
+    <button class="filter-btn" data-days="1">Hoje</button>
+    <button class="filter-btn" data-days="3">3 dias</button>
+    <button class="filter-btn" data-days="7">7 dias</button>
+    <button class="filter-btn" data-days="30">30 dias</button>
+  </div>
+  <label style="display:flex;align-items:center;gap:6px;margin-left:auto;font-size:0.9em;cursor:pointer;">
+    <input type="checkbox" id="hide-inactive-toggle"> Ocultar inativas
+  </label>
+</div>
+
+<h3 class="chart-title" style="margin:0 0 8px;font-size:1em;opacity:0.85;">Ativas <span id="active-count" style="opacity:0.6;font-weight:normal;"></span></h3>
+<div class="positions-grid" id="strategy-stats-active">
+  <div class="empty-state"><p>Nenhuma estrat&eacute;gia ativa</p></div>
+</div>
+
+<div id="inactive-section">
+  <h3 class="chart-title" style="margin:16px 0 8px;font-size:1em;opacity:0.85;">Inativas <span id="inactive-count" style="opacity:0.6;font-weight:normal;"></span></h3>
+  <div class="positions-grid" id="strategy-stats-inactive">
+    <div class="empty-state"><p>Nenhuma estrat&eacute;gia inativa</p></div>
+  </div>
+</div>
+
+<!-- Asset Fee Viability -->
+<h2 class="chart-title" style="margin-bottom:12px;">Ativos Monitorados</h2>
+<div class="positions-grid" id="asset-status-grid">
+  <div class="empty-state"><p>Aguardando primeiro candle...</p></div>
+</div>
+
+<!-- Open Positions -->
+<h2 class="chart-title" style="margin-bottom:12px;">Posi&ccedil;&otilde;es Abertas</h2>
+<div class="positions-grid" id="positions-grid">
+  <div class="empty-state"><p>Nenhuma posi&ccedil;&atilde;o aberta</p></div>
+</div>
+
+<div id="toast" class="toast"></div>
+
+<style>
+.ov-chip { display:inline-block;font-size:0.7rem;padding:2px 8px;border-radius:4px;font-family:'JetBrains Mono',monospace;margin-left:6px;vertical-align:middle; }
+.ov-chip-asset { background:#1E3A5F;color:#93C5FD; }
+.ov-chip-tag { background:#422006;color:#FBBF24; }
+</style>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function loadOverview() {
+  const data = await apiGet('/api/overview');
+  if (!data) return;
+  applyOverview(data);
+}
+
+function applyOverview(data) {
+  const statusEl = document.getElementById('kpi-status');
+  const statusLabels = { running: 'RODANDO', paused: 'PAUSADO', stopped: 'PARADO', error: 'ERRO' };
+  statusEl.textContent = statusLabels[data.bot_status] || data.bot_status;
+  statusEl.className = 'kpi-value';
+  if (data.bot_status === 'running') statusEl.classList.add('positive');
+  else if (data.bot_status === 'error') statusEl.classList.add('negative');
+
+  const dpnl = document.getElementById('kpi-daily-pnl');
+  dpnl.textContent = '$' + formatPnl(data.daily_pnl);
+  dpnl.className = 'kpi-value ' + pnlClass(data.daily_pnl);
+
+  const tpnl = document.getElementById('kpi-total-pnl');
+  tpnl.textContent = '$' + formatPnl(data.total_pnl);
+  tpnl.className = 'kpi-value ' + pnlClass(data.total_pnl);
+
+  document.getElementById('kpi-winrate').textContent = data.win_rate + '%';
+  document.getElementById('kpi-today').textContent = data.today_count;
+
+  updateStatusIndicator(data.bot_status);
+  renderStrategyStats(data.strategy_stats || []);
+  renderPositions(data.open_trades || []);
+  renderAssetStatus(data.asset_status || {});
+}
+
+const STRATEGY_FROM_NAME = [
+  ['bb_reversion','BB Reversion'], ['bb_stoch','BB Stoch'], ['stoch_scalp','Stoch Scalp'],
+  ['ema_cross','EMA Cross'], ['rsi_scalp','RSI Scalp'], ['bb_rsi','BB RSI'],
+  ['macd_cross','MACD Cross'], ['williams_r','Williams %R'],
+].sort((a, b) => b[0].length - a[0].length);
+
+function strategyCardHTML(item) {
+  const s = item.stats || {};
+  const m = item.metrics || {};
+  const enabled = item.enabled;
+
+  // Label
+  let stratLabel = (m.strategy || '').replace(/_/g, ' ');
+  if (!stratLabel) {
+    const match = STRATEGY_FROM_NAME.find(([prefix]) => item.name.startsWith(prefix + '_'));
+    stratLabel = match ? match[1] : item.name;
+  }
+
+  // Asset
+  let asset = m.asset;
+  if (!asset && Array.isArray(item.params?.assets) && item.params.assets.length) {
+    asset = item.params.assets[0];
+  }
+  const assetChip = asset ? `<span class="ov-chip ov-chip-asset">${asset}</span>` : '';
+  const tagChip = m.tag ? `<span class="ov-chip ov-chip-tag">${m.tag}</span>` : '';
+
+  // Trade stats (zeros if nenhum trade ainda)
+  const closed = s.closed_total ?? 0;
+  const wins = s.wins ?? 0;
+  const wr = s.win_rate ?? 0;
+  const pnl = s.pnl ?? 0;
+  const openCount = s.open_count ?? 0;
+  const pnlCls = pnl >= 0 ? 'positive' : 'negative';
+  const wrCls = wr >= 50 ? 'positive' : (wr > 0 ? 'negative' : '');
+  const openBadge = openCount > 0 ? `<span class="tag side-long" style="margin-left:6px">${openCount} aberto${openCount > 1 ? 's' : ''}</span>` : '';
+
+  const slipPct = s.avg_slippage_pct;
+  const slipStr = slipPct !== null && slipPct !== undefined ? `${slipPct >= 0 ? '+' : ''}${slipPct.toFixed(4)}%` : '--';
+  const slipCls = slipPct === null || slipPct === undefined ? '' : (slipPct <= 0.05 ? 'positive' : 'negative');
+
+  return `
+    <div class="position-card strategy-stat-card" style="${enabled ? '' : 'opacity:0.55;'}">
+      <div class="position-header" style="align-items:flex-start;">
+        <div>
+          <span class="position-asset">${stratLabel}${assetChip}${tagChip}${openBadge}</span>
+          <div style="font-size:0.7rem;color:#64748B;font-family:'JetBrains Mono',monospace;margin-top:2px;">${item.name}</div>
+        </div>
+        <span class="tag ${pnlCls === 'positive' ? 'side-long' : 'side-short'}">${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}</span>
+      </div>
+      <dl class="position-details">
+        <dt>Fechados</dt><dd>${closed}</dd>
+        <dt>Wins</dt><dd>${wins}</dd>
+        <dt>Win Rate</dt><dd class="${wrCls}">${wr}%</dd>
+        <dt>P&L</dt><dd class="${pnlCls}">${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}</dd>
+        <dt>Slippage</dt><dd class="${slipCls}">${slipStr}</dd>
+      </dl>
+    </div>
+  `;
+}
+
+// Combined render: merges /api/strategies/applied (source of truth for active/inactive)
+// with /api/strategy-stats (trade stats). Falls back to stats-only if applied empty.
+let _appliedCache = [];
+let _statsCache = [];
+
+function renderStrategyStats(stats) {
+  _statsCache = stats || [];
+  renderCombined();
+}
+
+function renderCombined() {
+  const statsMap = {};
+  for (const s of _statsCache) statsMap[s.strategy] = s;
+
+  const appliedNames = new Set(_appliedCache.map(a => a.name));
+
+  // Ativas = aplicadas (com enabled=true vão para "ativas"; enabled=false vão para "inativas")
+  const active = [];
+  const inactive = [];
+
+  for (const a of _appliedCache) {
+    const item = {
+      name: a.name,
+      enabled: a.enabled,
+      params: a.params,
+      metrics: a.metrics,
+      stats: statsMap[a.name] || null,
+    };
+    (a.enabled ? active : inactive).push(item);
+  }
+
+  // Legadas: estão no histórico de trades mas NÃO estão na lista de aplicadas
+  for (const s of _statsCache) {
+    if (appliedNames.has(s.strategy)) continue;
+    inactive.push({
+      name: s.strategy,
+      enabled: false,
+      params: {},
+      metrics: {},
+      stats: s,
+    });
+  }
+
+  const activeGrid = document.getElementById('strategy-stats-active');
+  const inactiveGrid = document.getElementById('strategy-stats-inactive');
+
+  activeGrid.innerHTML = active.length
+    ? active.map(strategyCardHTML).join('')
+    : '<div class="empty-state"><p>Nenhuma estratégia ativa</p></div>';
+
+  inactiveGrid.innerHTML = inactive.length
+    ? inactive.map(strategyCardHTML).join('')
+    : '<div class="empty-state"><p>Nenhuma estratégia inativa</p></div>';
+
+  document.getElementById('active-count').textContent = active.length ? `(${active.length})` : '';
+  document.getElementById('inactive-count').textContent = inactive.length ? `(${inactive.length})` : '';
+}
+
+async function loadAppliedStrategies() {
+  const data = await apiGet('/api/strategies/applied');
+  _appliedCache = Array.isArray(data) ? data : [];
+  renderCombined();
+}
+
+function applyHideInactive() {
+  const hide = document.getElementById('hide-inactive-toggle').checked;
+  document.getElementById('inactive-section').style.display = hide ? 'none' : '';
+  try { localStorage.setItem('hideInactiveStrategies', hide ? '1' : '0'); } catch (e) {}
+}
+
+function renderPositions(trades) {
+  const grid = document.getElementById('positions-grid');
+  if (!trades.length) {
+    grid.innerHTML = '<div class="empty-state"><p>Nenhuma posi\u00e7\u00e3o aberta</p></div>';
+    return;
+  }
+  grid.innerHTML = trades.map(t => `
+    <div class="position-card">
+      <div class="position-header">
+        <span class="position-asset">${t.asset}</span>
+        <span class="tag ${t.side === 'long' ? 'side-long' : 'side-short'}">${t.side.toUpperCase()}</span>
+      </div>
+      <dl class="position-details">
+        <dt>Entry</dt><dd>$${parseFloat(t.entry_price).toFixed(2)}</dd>
+        <dt>Size</dt><dd>${t.size}</dd>
+        <dt>TP</dt><dd>$${t.tp_price ? parseFloat(t.tp_price).toFixed(2) : '--'}</dd>
+        <dt>SL</dt><dd>$${t.sl_price ? parseFloat(t.sl_price).toFixed(2) : '--'}</dd>
+      </dl>
+    </div>
+  `).join('');
+}
+
+function renderAssetStatus(assetStatus) {
+  const grid = document.getElementById('asset-status-grid');
+  if (!assetStatus || Object.keys(assetStatus).length === 0) {
+    grid.innerHTML = '<div class="empty-state"><p>Aguardando primeiro candle...</p></div>';
+    return;
+  }
+  grid.innerHTML = Object.entries(assetStatus).map(([asset, s]) => {
+    const viable = s.fee_viable;
+    const atrPct = (s.atr_pct * 100).toFixed(4);
+    const reqPct = (s.required_pct * 100).toFixed(4);
+    return `
+      <div class="position-card">
+        <div class="position-header">
+          <span class="position-asset">${asset}</span>
+          <span class="tag ${viable ? 'side-long' : 'side-short'}">${viable ? 'FEE VIÁVEL' : 'BLOQUEADO'}</span>
+        </div>
+        <dl class="position-details">
+          <dt>ATR%</dt><dd>${atrPct}%</dd>
+          <dt>Req%</dt><dd>${reqPct}%</dd>
+        </dl>
+      </div>
+    `;
+  }).join('');
+}
+
+// Strategy stats filter
+let _activeDays = null;
+
+async function loadStrategyStats(days) {
+  _activeDays = days;
+  const qs = days != null ? `?days=${days}` : '';
+  const stats = await apiGet('/api/strategy-stats' + qs);
+  if (stats) renderStrategyStats(stats);
+}
+
+document.getElementById('strategy-filter-btns').addEventListener('click', e => {
+  const btn = e.target.closest('.filter-btn');
+  if (!btn) return;
+  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  const days = btn.dataset.days === '' ? null : parseInt(btn.dataset.days);
+  loadStrategyStats(days);
+});
+
+// Listen for SocketIO updates — re-render strategy stats with current filter
+document.addEventListener('hlUpdate', e => {
+  applyOverview(e.detail);
+  loadStrategyStats(_activeDays);
+});
+
+// Hide-inactive toggle (persisted)
+try {
+  const saved = localStorage.getItem('hideInactiveStrategies') === '1';
+  document.getElementById('hide-inactive-toggle').checked = saved;
+} catch (e) {}
+applyHideInactive();
+document.getElementById('hide-inactive-toggle').addEventListener('change', applyHideInactive);
+
+// Initial load
+loadOverview();
+loadStrategyStats(null);
+loadAppliedStrategies();
+setInterval(loadAppliedStrategies, 10000);
+</script>
+{% endblock %}

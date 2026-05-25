@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "RazorHL Dashboard",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["D:\\Documentos\\Trae\\RazorHL\\hyperliquid-bot\\run.py"],
+      "port": 8080
+    }
+  ]
+}

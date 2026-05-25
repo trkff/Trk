@@ -1,0 +1,406 @@
+{% extends "base.html" %}
+{% block title %}Backtest{% endblock %}
+{% block head %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1 class="page-title">Backtest</h1>
+  <p class="page-subtitle">Simula&ccedil;&atilde;o hist&oacute;rica de estrat&eacute;gias</p>
+</div>
+
+<!-- Filters -->
+<div class="filters">
+  <div class="filter-group">
+    <span class="filter-label">Estrat&eacute;gia</span>
+    <select id="bt-strategy" style="width:260px">
+      <option value="">Carregando...</option>
+    </select>
+  </div>
+  <div class="filter-group">
+    <span class="filter-label">Per&iacute;odo</span>
+    <select id="bt-days" style="width:120px">
+      <option value="30">30 dias</option>
+      <option value="60">60 dias</option>
+      <option value="90" selected>90 dias</option>
+      <option value="180">180 dias</option>
+    </select>
+  </div>
+  <div class="filter-group">
+    <span class="filter-label">Tamanho ($)</span>
+    <input type="number" id="bt-size" value="1000" min="10" step="100" style="width:110px">
+  </div>
+  <div class="filter-group">
+    <span class="filter-label">Fee Rate</span>
+    <input type="number" id="bt-fee" value="0" min="0" step="0.0001" style="width:100px">
+  </div>
+  <div class="filter-group" style="align-self:flex-end;">
+    <button class="btn btn-primary" onclick="runBacktest()" style="cursor:pointer">&#9654; Rodar</button>
+  </div>
+</div>
+
+<!-- Loading -->
+<div id="bt-loading" style="display:none; padding:32px 0; text-align:center;">
+  <div class="spinner" style="display:inline-block; width:32px; height:32px; border:3px solid #1E3A5F; border-top-color:#3B82F6; border-radius:50%; animation:spin 0.8s linear infinite; margin-bottom:12px;"></div>
+  <div id="bt-progress" style="color:#94A3B8; font-size:0.875rem; margin-top:8px;">Iniciando...</div>
+</div>
+
+<!-- Error -->
+<div id="bt-error" style="display:none; padding:16px; background:rgba(239,68,68,0.1); border:1px solid #EF4444; border-radius:8px; color:#EF4444; margin-bottom:16px;"></div>
+
+<!-- Results -->
+<div id="bt-results" style="display:none;">
+
+  <!-- KPI Cards -->
+  <div class="card-grid" style="margin-bottom:24px;">
+    <div class="card">
+      <div class="card-label">Total Trades</div>
+      <div class="card-value" id="kpi-total">--</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Win Rate</div>
+      <div class="card-value" id="kpi-winrate">--</div>
+    </div>
+    <div class="card">
+      <div class="card-label">P&amp;L Total</div>
+      <div class="card-value" id="kpi-pnl">--</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Max Drawdown</div>
+      <div class="card-value" id="kpi-dd">--</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Profit Factor</div>
+      <div class="card-value" id="kpi-pf">--</div>
+    </div>
+    <div class="card">
+      <div class="card-label">M&eacute;dia/Trade</div>
+      <div class="card-value" id="kpi-avg">--</div>
+    </div>
+    <div class="card">
+      <div class="card-label">ROI</div>
+      <div class="card-value" id="kpi-roi">--</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Trades/Dia</div>
+      <div class="card-value" id="kpi-tpd">--</div>
+    </div>
+  </div>
+
+  <!-- Chart -->
+  <div class="chart-container" style="margin-bottom:24px;">
+    <div class="chart-title">P&amp;L Acumulado</div>
+    <div class="chart-wrap"><canvas id="bt-chart"></canvas></div>
+  </div>
+
+  <!-- Trades Table -->
+  <div class="table-container">
+    <table>
+      <thead>
+        <tr>
+          <th>Data</th>
+          <th>Side</th>
+          <th>Entry</th>
+          <th>Exit</th>
+          <th>TP</th>
+          <th>SL</th>
+          <th>P&amp;L ($)</th>
+          <th>%</th>
+          <th>Resultado</th>
+          <th>Dura&ccedil;&atilde;o</th>
+        </tr>
+      </thead>
+      <tbody id="bt-trades-body">
+        <tr><td colspan="10" class="empty-state"><p>Nenhum trade simulado</p></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+</div>
+
+<div id="toast" class="toast"></div>
+
+<style>
+@keyframes spin { to { transform: rotate(360deg); } }
+</style>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let btChart = null;
+let pollInterval = null;
+
+// Map populated dynamically from /api/strategies/applied on page load.
+// Maps instance name (e.g. "bb_stoch_btc") → asset symbol (e.g. "BTC").
+const STRATEGY_ASSET = {};
+
+// Family prefix → display label (longest-prefix match)
+const FAMILY_LABELS = [
+  ['bb_reversion', 'BB Reversion'],
+  ['bb_stoch',     'BB + Stoch'],
+  ['stoch_scalp',  'Stoch Scalp'],
+  ['ema_cross',    'EMA Cross'],
+  ['rsi_scalp',    'RSI Scalp'],
+  ['bb_rsi',       'BB RSI'],
+  ['macd_cross',   'MACD Cross'],
+  ['williams_r',   'Williams %R'],
+].sort((a, b) => b[0].length - a[0].length);
+
+function familyLabel(name) {
+  for (const [prefix, label] of FAMILY_LABELS) {
+    if (name.startsWith(prefix)) return label;
+  }
+  return 'Outras';
+}
+
+async function loadStrategies() {
+  const select = document.getElementById('bt-strategy');
+  try {
+    const res = await fetch('/api/strategies/applied');
+    const data = await res.json();
+    if (!Array.isArray(data) || data.length === 0) {
+      select.innerHTML = '<option value="">Nenhuma estrat&eacute;gia aplicada</option>';
+      return;
+    }
+    // Group by family
+    const groups = {};
+    for (const s of data) {
+      const assets = (s.params && Array.isArray(s.params.assets)) ? s.params.assets : [];
+      const asset = assets[0] || s.name.split('_').pop().toUpperCase();
+      STRATEGY_ASSET[s.name] = asset;
+      const fam = familyLabel(s.name);
+      if (!groups[fam]) groups[fam] = [];
+      groups[fam].push(s);
+    }
+    // Build optgroups preserving the FAMILY_LABELS order
+    let html = '';
+    const seen = new Set();
+    for (const [, label] of FAMILY_LABELS) {
+      if (groups[label] && !seen.has(label)) {
+        seen.add(label);
+        html += `<optgroup label="${label}">`;
+        for (const s of groups[label]) {
+          html += `<option value="${s.name}">${s.display_name || s.name}</option>`;
+        }
+        html += '</optgroup>';
+      }
+    }
+    // Any leftover (unknown family) under "Outras"
+    if (groups['Outras']) {
+      html += '<optgroup label="Outras">';
+      for (const s of groups['Outras']) {
+        html += `<option value="${s.name}">${s.display_name || s.name}</option>`;
+      }
+      html += '</optgroup>';
+    }
+    select.innerHTML = html;
+  } catch (e) {
+    select.innerHTML = '<option value="">Erro ao carregar estrat&eacute;gias</option>';
+    console.error('loadStrategies failed:', e);
+  }
+}
+
+document.addEventListener('DOMContentLoaded', loadStrategies);
+
+async function runBacktest() {
+  const strategy = document.getElementById('bt-strategy').value;
+  if (!strategy) {
+    showError('Selecione uma estrat&eacute;gia da aba Estrat&eacute;gias para rodar.');
+    return;
+  }
+  // Clear previous state
+  clearInterval(pollInterval);
+  document.getElementById('bt-results').style.display = 'none';
+  document.getElementById('bt-error').style.display = 'none';
+  document.getElementById('bt-loading').style.display = 'block';
+  document.getElementById('bt-progress').textContent = 'Iniciando...';
+
+  const payload = {
+    strategy,
+    asset: STRATEGY_ASSET[strategy] || 'BTC',
+    days: parseInt(document.getElementById('bt-days').value),
+    trade_size_usd: parseFloat(document.getElementById('bt-size').value) || 1000,
+    fee_rate: (() => { const v = parseFloat(document.getElementById('bt-fee').value); return isNaN(v) ? 0.0009 : v; })(),
+  };
+
+  try {
+    const res = await fetch('/api/backtest/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (!data.job_id) {
+      showError(data.error || 'Falha ao iniciar backtest');
+      return;
+    }
+    pollStatus(data.job_id);
+  } catch (e) {
+    showError('Erro de rede: ' + e.message);
+  }
+}
+
+function pollStatus(jobId) {
+  pollInterval = setInterval(async () => {
+    const job = await apiGet('/api/backtest/status/' + jobId);
+    if (!job) return;
+
+    const progressEl = document.getElementById('bt-progress');
+    if (progressEl) progressEl.textContent = job.progress || '';
+
+    if (job.status === 'done') {
+      clearInterval(pollInterval);
+      document.getElementById('bt-loading').style.display = 'none';
+      document.getElementById('bt-results').style.display = 'block';
+      renderResults(job.result);
+    } else if (job.status === 'error') {
+      clearInterval(pollInterval);
+      showError(job.error || 'Erro desconhecido no backtest');
+    }
+  }, 2000);
+}
+
+function showError(msg) {
+  document.getElementById('bt-loading').style.display = 'none';
+  const el = document.getElementById('bt-error');
+  el.textContent = msg;
+  el.style.display = 'block';
+}
+
+function renderResults(data) {
+  if (!data) return;
+  renderMetrics(data.metrics || {});
+  renderChart((data.metrics || {}).cumulative_pnl || []);
+  renderTrades(data.trades || []);
+}
+
+function renderMetrics(m) {
+  const winRateClass = (m.win_rate || 0) >= 50 ? 'pnl-positive' : 'pnl-negative';
+  const pnlClass_ = (m.total_pnl || 0) >= 0 ? 'pnl-positive' : 'pnl-negative';
+  const avgClass = (m.avg_pnl || 0) >= 0 ? 'pnl-positive' : 'pnl-negative';
+  const pfClass = (m.profit_factor || 0) >= 1 ? 'pnl-positive' : 'pnl-negative';
+
+  document.getElementById('kpi-total').textContent =
+    (m.total_trades || 0) + ' (' + (m.wins || 0) + 'W / ' + (m.losses || 0) + 'L / ' + (m.timeouts || 0) + 'T)';
+  document.getElementById('kpi-winrate').innerHTML =
+    '<span class="' + winRateClass + '">' + (m.win_rate || 0).toFixed(1) + '%</span>';
+  document.getElementById('kpi-pnl').innerHTML =
+    '<span class="' + pnlClass_ + '">' + formatPnl(m.total_pnl || 0) + ' (' + formatPnl(m.total_pnl_pct || 0) + '%)</span>';
+  document.getElementById('kpi-dd').innerHTML =
+    '<span class="pnl-negative">-$' + Math.abs(m.max_drawdown || 0).toFixed(2) + '</span>';
+  document.getElementById('kpi-pf').innerHTML =
+    '<span class="' + pfClass + '">' + (m.profit_factor || 0).toFixed(2) + '</span>';
+  document.getElementById('kpi-avg').innerHTML =
+    '<span class="' + avgClass + '">' + formatPnl(m.avg_pnl || 0) + '</span>';
+  const roiClass = (m.roi || 0) >= 0 ? 'pnl-positive' : 'pnl-negative';
+  document.getElementById('kpi-roi').innerHTML =
+    '<span class="' + roiClass + '">' + (m.roi || 0).toFixed(2) + '%</span>';
+  document.getElementById('kpi-tpd').textContent = (m.trades_per_day || 0).toFixed(2);
+}
+
+function renderChart(cumData) {
+  const ctx = document.getElementById('bt-chart').getContext('2d');
+  if (btChart) btChart.destroy();
+
+  const labels = cumData.map(d => {
+    if (!d.entry_time) return '';
+    const dt = new Date(d.entry_time);
+    return dt.toLocaleDateString('pt-BR', { month: '2-digit', day: '2-digit' });
+  });
+  const values = cumData.map(d => d.cumulative_pnl);
+
+  btChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        label: 'P&L Acumulado ($)',
+        data: values,
+        borderColor: '#3B82F6',
+        backgroundColor: 'rgba(59,130,246,0.1)',
+        fill: true,
+        tension: 0.3,
+        pointRadius: 1,
+        borderWidth: 2,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: {
+        x: {
+          ticks: { color: '#64748B', font: { family: "'JetBrains Mono'" }, maxTicksLimit: 20 },
+          grid: { color: 'rgba(30,58,95,0.3)' },
+        },
+        y: {
+          ticks: {
+            color: '#64748B',
+            font: { family: "'JetBrains Mono'" },
+            callback: v => '$' + v,
+          },
+          grid: { color: 'rgba(30,58,95,0.3)' },
+        },
+      },
+      plugins: {
+        legend: { labels: { color: '#94A3B8', font: { family: "'JetBrains Mono'" } } },
+        tooltip: {
+          backgroundColor: '#1A2332',
+          titleColor: '#E2E8F0',
+          bodyColor: '#94A3B8',
+          borderColor: '#1E3A5F',
+          borderWidth: 1,
+          callbacks: { label: ctx => '$' + ctx.parsed.y.toFixed(2) },
+        },
+      },
+    },
+  });
+}
+
+function renderTrades(trades) {
+  const body = document.getElementById('bt-trades-body');
+  if (!trades.length) {
+    body.innerHTML = '<tr><td colspan="10" class="empty-state"><p>Nenhum trade simulado</p></td></tr>';
+    return;
+  }
+
+  // Show newest first — sort descending by entry_time without mutating original.
+  const sorted = trades.slice().sort((a, b) => (a.entry_time < b.entry_time ? 1 : -1));
+
+  const OUTCOME_LABELS = { tp: 'TP ✓', sl: 'SL ✗', bb_mid_win: 'BB Mid ✓', bb_mid_loss: 'BB Mid ✗', timeout: 'Timeout' };
+  const OUTCOME_CLASSES = { tp: 'pnl-positive', sl: 'pnl-negative', bb_mid_win: 'pnl-positive', bb_mid_loss: 'pnl-negative', timeout: '' };
+
+  body.innerHTML = sorted.map(t => {
+    const dur = t.entry_time && t.exit_time ? calcDuration(t.entry_time, t.exit_time) : '--';
+    const pnlCls = t.pnl >= 0 ? 'pnl-positive' : 'pnl-negative';
+    // BB mid exits: classify visually by pnl sign (matches compute_metrics).
+    const effectiveOutcome = t.outcome === 'bb_mid'
+      ? (t.pnl > 0 ? 'bb_mid_win' : 'bb_mid_loss')
+      : t.outcome;
+    const outcomeCls = OUTCOME_CLASSES[effectiveOutcome] || '';
+    const outcomeLabel = OUTCOME_LABELS[effectiveOutcome] || t.outcome;
+    const date = t.entry_time ? formatTime(t.entry_time) : '--';
+    return `<tr>
+      <td>${date}</td>
+      <td class="${sideClass(t.side)}">${t.side.toUpperCase()}</td>
+      <td>$${parseFloat(t.entry_price).toFixed(2)}</td>
+      <td>$${parseFloat(t.exit_price).toFixed(2)}</td>
+      <td>$${parseFloat(t.tp).toFixed(2)}</td>
+      <td>$${parseFloat(t.sl).toFixed(2)}</td>
+      <td class="${pnlCls}">${formatPnl(t.pnl)}</td>
+      <td class="${pnlCls}">${formatPnl(t.pnl_pct)}%</td>
+      <td class="${outcomeCls}">${outcomeLabel}</td>
+      <td>${dur}</td>
+    </tr>`;
+  }).join('');
+}
+
+function calcDuration(start, end) {
+  const ms = new Date(end) - new Date(start);
+  const mins = Math.floor(ms / 60000);
+  if (mins < 60) return mins + 'm';
+  const hrs = Math.floor(mins / 60);
+  return hrs + 'h ' + (mins % 60) + 'm';
+}
+</script>
+{% endblock %}
