@@ -120,6 +120,7 @@ log = get_logger(__name__)
 
 _QUEUE_MAXSIZE = 50
 _SEED_COUNT = 500
+_BOUNDARY_MARGIN_MS = 2000   # wait 2s past boundary so WS has priority before REST fallback fires
 
 
 class LighterCandleManager:
@@ -387,13 +388,28 @@ class LighterCandleManager:
                 self._reconnect()
 
     def _boundary_loop(self) -> None:
-        """Per-TF backup: REST fetch for subscribed (asset, tf) that received
-        no WS update in the last completed boundary window.
-        Wired fully in Task 7 (basic loop here so the thread is alive).
-        """
+        """For each interval, sleep until next boundary + margin, then check fallback."""
+        next_check: dict[str, int] = {}
+        for tf in self._intervals:
+            now_ms = int(time.time() * 1000)
+            next_check[tf] = _next_boundary_ms(now_ms, tf)
+
         while not self._stop_event.is_set():
-            if self._stop_event.wait(30):
-                break
+            now_ms = int(time.time() * 1000)
+            # Pick the soonest upcoming boundary
+            tf, boundary = min(next_check.items(), key=lambda x: x[1])
+            wait_ms = (boundary + _BOUNDARY_MARGIN_MS) - now_ms
+            if wait_ms > 0:
+                if self._stop_event.wait(wait_ms / 1000):
+                    break
+
+            try:
+                self._check_boundary_fallback(boundary, tf)
+            except Exception as e:
+                log.error(f"boundary_loop check failed ({tf}): {e}", exc_info=True)
+
+            now_ms = int(time.time() * 1000)
+            next_check[tf] = _next_boundary_ms(now_ms, tf)
 
     def _reconnect(self) -> None:
         """Close current WS and respawn thread. Resubscribes via _on_open."""
@@ -408,3 +424,40 @@ class LighterCandleManager:
         with self._ts_lock:
             self._last_msg_ts = time.time()
         log.info("LighterCandleManager: reconnected.")
+
+    def _check_boundary_fallback(self, boundary_ms: int, interval: str) -> None:
+        """For every subscribed (asset, interval) where _last_update_ms is older
+        than `boundary_ms`, force a REST fetch and emit close event if new candle found.
+        """
+        for (asset, tf), _ in list(self._subscriptions.items()):
+            if tf != interval:
+                continue
+            last = self._last_update_ms.get((asset, tf), 0)
+            if last >= boundary_ms:
+                continue  # WS already brought a newer update
+
+            try:
+                df = self._client.get_candles(asset, tf, count=2)
+            except Exception as e:
+                log.warning(f"[{asset}] boundary REST fallback failed ({tf}): {e}")
+                continue
+            if df is None or df.empty:
+                continue
+
+            new_last = int(df.iloc[-1]["timestamp"])
+            # REST returns fully-consolidated OHLC; overwrite the buffer
+            self._set_buffer((asset, tf), df.copy())
+            self._last_update_ms[(asset, tf)] = new_last
+
+            # Emit close if we haven't emitted the previous candle yet
+            prev_t = boundary_ms - _INTERVAL_MS[tf]
+            last_emitted = getattr(self, "_last_emitted_t", {}).get((asset, tf), 0)
+            if prev_t > last_emitted:
+                if not hasattr(self, "_last_emitted_t"):
+                    self._last_emitted_t = {}
+                self._last_emitted_t[(asset, tf)] = prev_t
+                try:
+                    self._queue.put_nowait((asset, tf))
+                    log.info(f"[{asset}] {tf} boundary fallback fired (WS silent)")
+                except queue.Full:
+                    pass

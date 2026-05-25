@@ -271,3 +271,54 @@ class TestSharedBuffer:
 
         df = mgr.get_candles("BTC", "5m", count=10)
         assert len(df) == 2
+
+
+class TestBoundaryFallback:
+    def test_silent_channel_triggers_rest_and_emits(self):
+        cb = MagicMock()
+        client = _mk_client()
+        # Simula REST devolvendo uma vela nova
+        new_row_df = pd.DataFrame([{
+            "timestamp": 1700000300000,
+            "open": 1.0, "high": 1.0, "low": 1.0, "close": 99.0, "volume": 0.0,
+        }])
+        new_row_df["datetime"] = pd.to_datetime(new_row_df["timestamp"], unit="ms", utc=True)
+        new_row_df.set_index("datetime", inplace=True)
+        client.get_candles.return_value = new_row_df
+
+        mgr = LighterCandleManager(
+            client=client,
+            assets=["BTC"],
+            intervals=["5m"],
+            on_candle_close=cb,
+        )
+        mgr._subscriptions = {("BTC", "5m"): 0}
+        # Última update conhecida = vela 1700000000000 (já fechada faz tempo)
+        mgr._last_update_ms[("BTC", "5m")] = 1700000000000
+
+        # Boundary que já passou (todas as velas após 1700000000000 estão silentes)
+        boundary_ms = 1700000300000
+        mgr._check_boundary_fallback(boundary_ms, "5m")
+
+        # Deve ter chamado REST e enfileirado o close
+        client.get_candles.assert_called()
+        assert mgr._queue.qsize() == 1
+
+    def test_recent_update_skips_rest(self):
+        cb = MagicMock()
+        client = _mk_client()
+        mgr = LighterCandleManager(
+            client=client,
+            assets=["BTC"],
+            intervals=["5m"],
+            on_candle_close=cb,
+        )
+        mgr._subscriptions = {("BTC", "5m"): 0}
+        boundary_ms = 1700000300000
+        # WS já trouxe update da vela atual (após o boundary)
+        mgr._last_update_ms[("BTC", "5m")] = boundary_ms + 1000
+
+        mgr._check_boundary_fallback(boundary_ms, "5m")
+
+        client.get_candles.assert_not_called()
+        assert mgr._queue.qsize() == 0
