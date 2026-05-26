@@ -480,6 +480,22 @@ def create_app():
         )
         return jsonify({"job_id": job_id})
 
+    @app.route("/api/scanner_v2/replay", methods=["POST"])
+    def api_scanner_v2_replay():
+        from bot.backtest.scanner_v2 import start_replay_job
+        data = request.get_json() or {}
+        combos = data.get("combos") or []
+        if not isinstance(combos, list) or not combos:
+            return jsonify({"error": "combos vazio ou inválido"}), 400
+        job_id = start_replay_job(
+            data.get("asset", "BTC").upper(),
+            combos,
+            n_windows=int(data.get("n_windows", 6)),
+            days=int(data.get("days", 180)),
+            timeframe=data.get("timeframe", "5m"),
+        )
+        return jsonify({"job_id": job_id})
+
     @app.route("/api/scanner_v2/apply", methods=["POST"])
     def api_scanner_v2_apply():
         # Reusa o apply_result do scanner antigo: os 7 campos novos (adx/session/atr)

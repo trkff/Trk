@@ -114,18 +114,38 @@
             <option value="off">Apenas %</option>
           </select>
         </div>
+        <div class="flt-group">
+          <div class="flt-label" title="% de meses com ROI > 0">% meses+ &ge;</div>
+          <input class="flt-input" type="number" id="f-pctpos" step="5" min="0" max="100" oninput="applyFilters()">
+        </div>
+        <div class="flt-group">
+          <div class="flt-label" title="ROI do pior m&ecirc;s &ge; este valor (use negativo, ex: -3)">Pior m&ecirc;s &ge;</div>
+          <input class="flt-input" type="number" id="f-worst" step="0.5" oninput="applyFilters()">
+        </div>
+        <div class="flt-group">
+          <div class="flt-label" title="Mediana dos ROIs mensais &ge; este valor">Mediana m&ecirc;s &ge;</div>
+          <input class="flt-input" type="number" id="f-median" step="0.1" oninput="applyFilters()">
+        </div>
         <div style="display:flex;gap:8px;align-self:flex-end;">
           <button class="btn" onclick="resetFilters()" style="background:#1E3A5F;cursor:pointer;">Resetar</button>
         </div>
       </div>
     </div>
 
-    <div id="sc-count" style="color:#64748B;font-size:0.8rem;margin-bottom:8px;"></div>
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px;flex-wrap:wrap;">
+      <div id="sc-count" style="color:#64748B;font-size:0.8rem;"></div>
+      <div id="sc-selection-bar" style="display:none;align-items:center;gap:12px;">
+        <span style="color:#94A3B8;font-size:0.8rem;"><span id="sel-count" style="color:#3B82F6;font-weight:600;">0</span> / 10 selecionados</span>
+        <button class="btn" onclick="clearSelection()" style="background:#1E3A5F;cursor:pointer;font-size:0.78rem;padding:6px 12px;">Limpar</button>
+        <button class="btn btn-primary" onclick="openReplayModal()" style="cursor:pointer;font-size:0.78rem;padding:6px 14px;">&#9654; Validar em janelas</button>
+      </div>
+    </div>
 
     <div class="table-container">
       <table id="sc-table">
         <thead>
           <tr>
+            <th style="width:32px;"><input type="checkbox" id="sel-all" onchange="toggleSelectAll(this)" style="accent-color:#3B82F6;cursor:pointer;"></th>
             <th class="sortable" data-col="strategy" onclick="sortBy('strategy')">Estrat&eacute;gia <span class="sort-icon">&#8645;</span></th>
             <th>Par&acirc;metros base</th>
             <th title="ADX filter">ADX</th>
@@ -137,11 +157,12 @@
             <th class="sortable" data-col="pf" onclick="sortBy('pf')">PF <span class="sort-icon">&#8645;</span></th>
             <th class="sortable" data-col="tpd" onclick="sortBy('tpd')">TPD <span class="sort-icon">&#8645;</span></th>
             <th class="sortable" data-col="max_dd" onclick="sortBy('max_dd')">DD <span class="sort-icon">&#8645;</span></th>
+            <th class="sortable" data-col="pct_pos" onclick="sortBy('pct_pos')" title="% de meses com ROI > 0 / Mediana mensal">Consist <span class="sort-icon">&#8645;</span></th>
             <th></th>
           </tr>
         </thead>
         <tbody id="sc-tbody">
-          <tr><td colspan="12" class="empty-state"><p>Rode o grid scan para ver resultados</p></td></tr>
+          <tr><td colspan="14" class="empty-state"><p>Rode o grid scan para ver resultados</p></td></tr>
         </tbody>
       </table>
     </div>
@@ -192,10 +213,12 @@
       </select>
     </div>
     <div class="filter-group">
-      <span class="filter-label">Top N</span>
+      <span class="filter-label" title="Quantos combos do topo IS s&atilde;o testados no OOS. Menor = teste mais rigoroso (menos cherry-picking)">Top N</span>
       <select id="wfo-topn" style="width:80px">
-        <option value="3">3</option>
-        <option value="5" selected>5</option>
+        <option value="1">1</option>
+        <option value="2">2</option>
+        <option value="3" selected>3</option>
+        <option value="5">5</option>
         <option value="10">10</option>
       </select>
     </div>
@@ -262,6 +285,66 @@
 
 <div id="toast" class="toast"></div>
 
+<!-- Replay modal: Validar combos selecionados em janelas -->
+<div id="replay-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:1000;align-items:center;justify-content:center;">
+  <div style="background:#0F1923;border:1px solid #1E3A5F;border-radius:12px;padding:24px;width:95vw;max-width:1280px;max-height:90vh;overflow:auto;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+      <h3 style="margin:0;color:#E2E8F0;">Validar combos selecionados em janelas</h3>
+      <button class="btn" onclick="closeReplayModal()" style="background:#1E3A5F;cursor:pointer;padding:6px 12px;">Fechar</button>
+    </div>
+    <p style="color:#94A3B8;font-size:0.8rem;margin-bottom:12px;line-height:1.5;">
+      Para cada combo selecionado, replica os par&acirc;metros exatos em N janelas sequenciais do mesmo per&iacute;odo.
+      Responde &agrave; pergunta: <span style="color:#E2E8F0;">"esses params espec&iacute;ficos sobrevivem a per&iacute;odos diferentes?"</span>
+      Sem IS/OOS &mdash; apenas fatiamento temporal.
+    </p>
+    <div style="display:flex;gap:16px;align-items:flex-end;margin-bottom:16px;flex-wrap:wrap;padding:12px;background:#0A1018;border:1px solid #1E3A5F;border-radius:6px;">
+      <div class="filter-group">
+        <span class="filter-label">Ativo / TF</span>
+        <span id="replay-asset-info" style="color:#E2E8F0;font-family:'JetBrains Mono',monospace;font-size:0.85rem;"></span>
+      </div>
+      <div class="filter-group">
+        <span class="filter-label">Combos</span>
+        <span id="replay-combos-info" style="color:#E2E8F0;font-family:'JetBrains Mono',monospace;font-size:0.85rem;"></span>
+      </div>
+      <div class="filter-group">
+        <span class="filter-label">Per&iacute;odo</span>
+        <select id="replay-days" style="width:120px">
+          <option value="90">90 dias</option>
+          <option value="180" selected>180 dias</option>
+          <option value="270">270 dias</option>
+          <option value="365">365 dias</option>
+        </select>
+      </div>
+      <div class="filter-group">
+        <span class="filter-label">N&ordm; janelas</span>
+        <select id="replay-n" style="width:80px">
+          <option value="3">3</option>
+          <option value="4">4</option>
+          <option value="6" selected>6</option>
+          <option value="12">12</option>
+        </select>
+      </div>
+      <button class="btn btn-primary" onclick="runReplay()" style="cursor:pointer;align-self:flex-end;">&#9654; Rodar</button>
+    </div>
+
+    <div id="replay-loading" style="display:none;padding:24px 0;text-align:center;">
+      <div class="spinner" style="display:inline-block;width:28px;height:28px;border:3px solid #1E3A5F;border-top-color:#3B82F6;border-radius:50%;animation:spin 0.8s linear infinite;"></div>
+      <div id="replay-progress" style="color:#94A3B8;font-size:0.85rem;margin-top:8px;">Iniciando replay...</div>
+    </div>
+
+    <div id="replay-error" style="display:none;padding:12px;background:rgba(239,68,68,0.1);border:1px solid #EF4444;border-radius:6px;color:#EF4444;margin-bottom:12px;font-size:0.85rem;"></div>
+
+    <div id="replay-results" style="display:none;">
+      <div class="table-container">
+        <table id="replay-table">
+          <thead id="replay-thead"></thead>
+          <tbody id="replay-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- Apply modal (compartilhado entre Grid e WFO) -->
 <div id="sc-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:1000;align-items:center;justify-content:center;">
   <div style="background:#0F1923;border:1px solid #1E3A5F;border-radius:12px;padding:24px;width:480px;max-width:90vw;">
@@ -306,6 +389,19 @@ th[data-sorted] .sort-icon { color:#3B82F6; }
 .fchip-off { background:#0A1018;color:#475569;border:1px solid #1E3A5F; }
 .eff-bar { height:8px;background:#1E3A5F;border-radius:4px;overflow:hidden;min-width:60px; }
 .eff-bar > div { height:100%;background:linear-gradient(90deg,#EF4444,#F59E0B,#10B981); }
+.row-sel { accent-color:#3B82F6;cursor:pointer; }
+tr.selected { background:rgba(59,130,246,0.08); }
+.consist-cell { display:flex;flex-direction:column;gap:1px;font-family:'JetBrains Mono',monospace;font-size:0.72rem;line-height:1.2; }
+.consist-pct { color:#E2E8F0;font-weight:600; }
+.consist-med { color:#64748B;font-size:0.68rem; }
+#replay-table th { background:#0A1018;color:#94A3B8;font-size:0.7rem;text-transform:uppercase;letter-spacing:0.05em;padding:6px 8px;border-bottom:1px solid #1E3A5F; }
+#replay-table td { padding:6px 8px;font-family:'JetBrains Mono',monospace;font-size:0.78rem;border-bottom:1px solid #0A1018;text-align:center; }
+#replay-table td.params-cell { text-align:left;max-width:240px;white-space:normal;color:#64748B;font-size:0.72rem;line-height:1.5; }
+.win-cell { padding:4px 6px;border-radius:4px;font-family:'JetBrains Mono',monospace;font-size:0.72rem;display:inline-flex;flex-direction:column;align-items:center;gap:1px;min-width:54px; }
+.win-pos { background:rgba(16,185,129,0.12);color:#10B981; }
+.win-neg { background:rgba(239,68,68,0.12);color:#EF4444; }
+.win-zero { background:#0A1018;color:#64748B; }
+.win-skip { background:#0A1018;color:#475569;font-style:italic;font-size:0.65rem; }
 </style>
 {% endblock %}
 
@@ -313,6 +409,7 @@ th[data-sorted] .sort-icon { color:#3B82F6; }
 <script>
 let pollInterval = null;
 let pollWfo      = null;
+let pollReplay   = null;
 let allApproved  = [];
 let filtered     = [];
 let displayed    = [];
@@ -321,6 +418,8 @@ let sortKey      = 'roi';
 let sortDir      = -1;
 let pendingApply = null;
 let activeMode   = 'grid';
+let selectedRows = new Set();    // Set of indices in `displayed` array — but we track by stable id
+const MAX_SELECTION = 10;
 
 // ── Mode switching ────────────────────────────────────────────────
 function switchMode(mode, btn) {
@@ -404,10 +503,31 @@ function pollScanStatus(jobId) {
   }, 2000);
 }
 
+function _consistStats(row) {
+  const m = row.monthly || [];
+  if (!m.length) return {pct_pos: null, worst: null, median: null, n_months: 0};
+  const rois = m.map(x => x.roi || 0);
+  const n_pos = rois.filter(r => r > 0).length;
+  const sorted = [...rois].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  const median = sorted.length % 2 ? sorted[mid] : (sorted[mid-1] + sorted[mid]) / 2;
+  return {
+    pct_pos: +((n_pos / rois.length) * 100).toFixed(1),
+    worst: +Math.min(...rois).toFixed(2),
+    median: +median.toFixed(2),
+    n_months: rois.length,
+  };
+}
+
 function renderResults(data) {
-  allApproved = data.approved || [];
+  allApproved = (data.approved || []).map((r, i) => {
+    const s = _consistStats(r);
+    return {...r, _idx: i, pct_pos: s.pct_pos, worst_month: s.worst, median_month: s.median, n_months: s.n_months};
+  });
   activeStrat = 'all';
   sortKey = 'roi'; sortDir = -1;
+  selectedRows.clear();
+  updateSelectionBar();
   renderSummaryCards(data);
   renderTabs(data);
   applyFilters();
@@ -468,6 +588,9 @@ function applyFilters() {
   const adxMode   = document.getElementById('f-adx').value;
   const sessMode  = document.getElementById('f-sess').value;
   const atrMode   = document.getElementById('f-atr').value;
+  const minPctPos = isNaN(v('f-pctpos')) ? 0         : v('f-pctpos');
+  const minWorst  = isNaN(v('f-worst'))  ? -Infinity : v('f-worst');
+  const minMedian = isNaN(v('f-median')) ? -Infinity : v('f-median');
 
   filtered = allApproved.filter(r => {
     if (activeStrat !== 'all' && r.strategy !== activeStrat) return false;
@@ -485,13 +608,23 @@ function applyFilters() {
     if (sessMode === 'off' &&  sessOn) return false;
     if (atrMode === 'on'  && !r.atr_tp_mode) return false;
     if (atrMode === 'off' &&  r.atr_tp_mode) return false;
+    // Monthly consistency filters — only apply if row has monthly data
+    if (r.n_months > 0) {
+      if (r.pct_pos < minPctPos) return false;
+      if (r.worst_month < minWorst) return false;
+      if (r.median_month < minMedian) return false;
+    } else if (minPctPos > 0 || minWorst > -Infinity || minMedian > -Infinity) {
+      // Filtros mensais ativos mas row sem dado mensal — esconde
+      return false;
+    }
     return true;
   });
   sortAndRender();
 }
 
 function resetFilters() {
-  ['f-roi','f-wr','f-pf','f-dd','f-trades','f-tpd-min','f-tpd-max'].forEach(id => document.getElementById(id).value='');
+  ['f-roi','f-wr','f-pf','f-dd','f-trades','f-tpd-min','f-tpd-max','f-pctpos','f-worst','f-median']
+    .forEach(id => document.getElementById(id).value='');
   ['f-adx','f-sess','f-atr'].forEach(id => document.getElementById(id).value='any');
   applyFilters();
 }
@@ -523,13 +656,14 @@ function sortAndRender() {
 }
 
 const SKIP = new Set(['strategy','trades','wr','pf','roi','tpd','max_dd','approved','monthly','tf',
-                      'adx_period','adx_min','session_start','session_end','atr_tp_mode','atr_tp_mult','atr_sl_mult']);
+                      'adx_period','adx_min','session_start','session_end','atr_tp_mode','atr_tp_mult','atr_sl_mult',
+                      '_idx','pct_pos','worst_month','median_month','n_months']);
 
 function renderTable(rows) {
   const asset = document.getElementById('sc-asset').value;
   const tbody = document.getElementById('sc-tbody');
   if (!rows.length) {
-    tbody.innerHTML = '<tr><td colspan="12" class="empty-state"><p>Nenhum resultado para os filtros atuais</p></td></tr>';
+    tbody.innerHTML = '<tr><td colspan="14" class="empty-state"><p>Nenhum resultado para os filtros atuais</p></td></tr>';
     return;
   }
   tbody.innerHTML = rows.map((r, idx) => {
@@ -546,9 +680,21 @@ function renderTable(rows) {
     const atrChip = r.atr_tp_mode
       ? `<span class="fchip fchip-on">${r.atr_tp_mult}/${r.atr_sl_mult}</span>`
       : '<span class="fchip fchip-off">%</span>';
-    return `<tr>
+    let consistCell = '<span style="color:#1E3A5F;font-size:0.7rem;">&mdash;</span>';
+    if (r.n_months > 0) {
+      const pctCls = r.pct_pos >= 70 ? 'pnl-positive' : (r.pct_pos < 50 ? 'pnl-negative' : '');
+      const medCls = r.median_month > 0 ? 'pnl-positive' : 'pnl-negative';
+      consistCell = `<span class="consist-cell">
+        <span class="consist-pct ${pctCls}">${r.pct_pos.toFixed(0)}%+</span>
+        <span class="consist-med ${medCls}">med ${r.median_month > 0?'+':''}${r.median_month}</span>
+      </span>`;
+    }
+    const isSelected = selectedRows.has(r._idx);
+    const checkbox = `<input type="checkbox" class="row-sel" data-idx="${r._idx}" ${isSelected ? 'checked' : ''}>`;
+    return `<tr data-row-idx="${idx}" class="${isSelected ? 'selected' : ''}">
+      <td>${checkbox}</td>
       <td style="white-space:nowrap">${r.strategy.replace(/_/g,' ')}</td>
-      <td style="font-size:0.78rem;color:#64748B;max-width:280px;white-space:normal;line-height:1.6;">${fmtParams(r)}</td>
+      <td style="font-size:0.78rem;color:#64748B;max-width:260px;white-space:normal;line-height:1.6;">${fmtParams(r)}</td>
       <td>${adxChip}</td>
       <td>${sessChip}</td>
       <td>${atrChip}</td>
@@ -558,16 +704,20 @@ function renderTable(rows) {
       <td class="${pfCls}">${r.pf.toFixed(2)}</td>
       <td>${r.tpd.toFixed(1)}</td>
       <td class="${ddCls}">${r.max_dd.toFixed(1)}%</td>
-      <td><button class="btn" style="padding:4px 10px;font-size:0.75rem;cursor:pointer;" data-row-idx="${idx}">Aplicar</button></td>
+      <td>${consistCell}</td>
+      <td><button class="btn" style="padding:4px 10px;font-size:0.75rem;cursor:pointer;" data-apply-idx="${idx}">Aplicar</button></td>
     </tr>`;
   }).join('');
 
-  tbody.querySelectorAll('button[data-row-idx]').forEach(btn => {
+  tbody.querySelectorAll('button[data-apply-idx]').forEach(btn => {
     btn.addEventListener('click', () => {
-      const idx = parseInt(btn.dataset.rowIdx, 10);
+      const idx = parseInt(btn.dataset.applyIdx, 10);
       const row = displayed[idx];
       if (row) openModal(asset, row);
     });
+  });
+  tbody.querySelectorAll('input.row-sel').forEach(cb => {
+    cb.addEventListener('change', () => onRowSelect(parseInt(cb.dataset.idx, 10), cb.checked));
   });
 }
 
@@ -575,6 +725,182 @@ function fmtParams(r) {
   return Object.entries(r).filter(([k]) => !SKIP.has(k) && k !== 'monthly')
     .map(([k, v]) => `<span style="color:#94A3B8">${k}</span>=<span style="color:#E2E8F0">${v}</span>`)
     .join(' <span style="color:#1E3A5F">&middot;</span> ');
+}
+
+// ── Selection management ──────────────────────────────────────────
+function onRowSelect(idx, checked) {
+  if (checked) {
+    if (selectedRows.size >= MAX_SELECTION) {
+      showToast(`M&aacute;ximo ${MAX_SELECTION} combos selecionados`, true);
+      // Uncheck the just-clicked checkbox
+      const cb = document.querySelector(`input.row-sel[data-idx="${idx}"]`);
+      if (cb) cb.checked = false;
+      return;
+    }
+    selectedRows.add(idx);
+  } else {
+    selectedRows.delete(idx);
+  }
+  // Update visual state of the row
+  const cb = document.querySelector(`input.row-sel[data-idx="${idx}"]`);
+  if (cb) cb.closest('tr').classList.toggle('selected', checked);
+  updateSelectionBar();
+}
+
+function toggleSelectAll(masterCb) {
+  // Only selects from displayed rows, up to MAX_SELECTION
+  if (masterCb.checked) {
+    for (const r of displayed) {
+      if (selectedRows.size >= MAX_SELECTION) break;
+      selectedRows.add(r._idx);
+    }
+    if (displayed.length > MAX_SELECTION) {
+      showToast(`Selecionados primeiros ${MAX_SELECTION} (m&aacute;ximo)`, false);
+    }
+  } else {
+    selectedRows.clear();
+  }
+  renderTable(displayed);
+  updateSelectionBar();
+}
+
+function clearSelection() {
+  selectedRows.clear();
+  const masterCb = document.getElementById('sel-all');
+  if (masterCb) masterCb.checked = false;
+  renderTable(displayed);
+  updateSelectionBar();
+}
+
+function updateSelectionBar() {
+  const bar = document.getElementById('sc-selection-bar');
+  const count = document.getElementById('sel-count');
+  if (!bar || !count) return;
+  count.textContent = selectedRows.size;
+  bar.style.display = selectedRows.size > 0 ? 'flex' : 'none';
+}
+
+// ── Replay modal ──────────────────────────────────────────────────
+function openReplayModal() {
+  if (selectedRows.size === 0) {
+    showToast('Selecione ao menos 1 combo', true);
+    return;
+  }
+  const asset = document.getElementById('sc-asset').value;
+  const tf = document.getElementById('sc-tf').value;
+  document.getElementById('replay-asset-info').textContent = `${asset} / ${tf}`;
+  document.getElementById('replay-combos-info').textContent = `${selectedRows.size} selecionado(s)`;
+  document.getElementById('replay-results').style.display = 'none';
+  document.getElementById('replay-error').style.display = 'none';
+  document.getElementById('replay-loading').style.display = 'none';
+  document.getElementById('replay-modal').style.display = 'flex';
+}
+
+function closeReplayModal() {
+  clearInterval(pollReplay);
+  document.getElementById('replay-modal').style.display = 'none';
+}
+
+async function runReplay() {
+  clearInterval(pollReplay);
+  document.getElementById('replay-results').style.display = 'none';
+  document.getElementById('replay-error').style.display = 'none';
+  document.getElementById('replay-loading').style.display = 'block';
+  document.getElementById('replay-progress').textContent = 'Iniciando replay...';
+
+  const asset = document.getElementById('sc-asset').value;
+  const tf = document.getElementById('sc-tf').value;
+  const days = parseInt(document.getElementById('replay-days').value);
+  const nw = parseInt(document.getElementById('replay-n').value);
+
+  // Build combos from selected rows — strip UI-only fields, keep all params + metrics
+  const combos = [];
+  for (const idx of selectedRows) {
+    const row = allApproved.find(r => r._idx === idx);
+    if (!row) continue;
+    const clean = {};
+    Object.entries(row).forEach(([k, v]) => {
+      if (k === 'monthly' || k.startsWith('_') || ['pct_pos','worst_month','median_month','n_months'].includes(k)) return;
+      clean[k] = v;
+    });
+    combos.push(clean);
+  }
+
+  try {
+    const res = await fetch('/api/scanner_v2/replay', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({asset, timeframe: tf, days, n_windows: nw, combos}),
+    });
+    const data = await res.json();
+    if (!data.job_id) { showReplayError(data.error || 'Falha ao iniciar'); return; }
+    pollReplayStatus(data.job_id);
+  } catch(e) { showReplayError('Erro de rede: ' + e.message); }
+}
+
+function pollReplayStatus(jobId) {
+  pollReplay = setInterval(async () => {
+    const r = await fetch('/api/scanner_v2/status/' + jobId);
+    const job = await r.json();
+    if (!job) return;
+    const el = document.getElementById('replay-progress');
+    if (el) el.textContent = job.progress || '';
+    if (job.status === 'done') {
+      clearInterval(pollReplay);
+      document.getElementById('replay-loading').style.display = 'none';
+      document.getElementById('replay-results').style.display = 'block';
+      renderReplayResults(job.result);
+    } else if (job.status === 'error') {
+      clearInterval(pollReplay);
+      showReplayError(job.error || 'Erro desconhecido');
+    }
+  }, 1500);
+}
+
+function renderReplayResults(data) {
+  const nw = data.n_windows;
+  const wd = data.window_days;
+  // Header: combo info | summary cols | window cols
+  let thead = '<tr><th style="text-align:left;">Combo</th><th>%+</th><th>Pior</th><th>Mediana</th><th>Total ROI</th>';
+  for (let i = 0; i < nw; i++) thead += `<th>J${i+1}<br><span style="color:#475569;font-weight:400;text-transform:none;">~${wd}d</span></th>`;
+  thead += '</tr>';
+  document.getElementById('replay-thead').innerHTML = thead;
+
+  const rows = (data.combos || []).map((c, ci) => {
+    const s = c.summary;
+    const pctCls = s.pct_positive_windows >= 70 ? 'pnl-positive' : (s.pct_positive_windows < 50 ? 'pnl-negative' : '');
+    const worstCls = s.worst_window_roi > 0 ? 'pnl-positive' : (s.worst_window_roi < -2 ? 'pnl-negative' : '');
+    const medCls = s.median_window_roi > 0 ? 'pnl-positive' : 'pnl-negative';
+    const totCls = s.total_roi > 0 ? 'pnl-positive' : 'pnl-negative';
+
+    const winCells = (c.windows || []).map(w => {
+      if (w.skipped) return '<td><span class="win-cell win-skip">skip</span></td>';
+      const cls = w.roi > 0 ? 'win-pos' : (w.roi < 0 ? 'win-neg' : 'win-zero');
+      const sign = w.roi > 0 ? '+' : '';
+      return `<td><span class="win-cell ${cls}" title="WR ${(w.wr*100).toFixed(1)}% &middot; PF ${w.pf.toFixed(2)} &middot; ${w.trades} trades">
+        <span>${sign}${w.roi.toFixed(1)}%</span>
+        <span style="font-size:0.6rem;opacity:0.7;">${w.trades}t</span>
+      </span></td>`;
+    }).join('');
+
+    const comboLabel = `<strong>${c.params.strategy.replace(/_/g,' ')}</strong><br>
+      <span style="color:#94A3B8;font-size:0.7rem;">${fmtParams(c.params)}</span>`;
+
+    return `<tr>
+      <td class="params-cell">${comboLabel}</td>
+      <td class="${pctCls}">${s.pct_positive_windows}%</td>
+      <td class="${worstCls}">${s.worst_window_roi > 0?'+':''}${s.worst_window_roi}%</td>
+      <td class="${medCls}">${s.median_window_roi > 0?'+':''}${s.median_window_roi}%</td>
+      <td class="${totCls}">${s.total_roi > 0?'+':''}${s.total_roi}%</td>
+      ${winCells}
+    </tr>`;
+  }).join('');
+  document.getElementById('replay-tbody').innerHTML = rows || '<tr><td colspan="99" class="empty-state"><p>Sem combos</p></td></tr>';
+}
+
+function showReplayError(msg) {
+  document.getElementById('replay-loading').style.display = 'none';
+  const el = document.getElementById('replay-error');
+  el.textContent = msg; el.style.display = 'block';
 }
 
 // ── WFO ───────────────────────────────────────────────────────────

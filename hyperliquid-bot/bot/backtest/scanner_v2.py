@@ -1191,3 +1191,168 @@ def start_wfo_job(asset: str, total_days: int = 180,
 def get_job(job_id: str) -> dict | None:
     with _jobs_lock:
         return _jobs.get(job_id)
+
+
+# ── Replay combos across time windows ─────────────────────────────────────
+
+_MAX_REPLAY_COMBOS = 10
+
+
+def replay_combos_in_windows(asset: str, combos: list[dict], n_windows: int = 6,
+                             days: int = 180, timeframe: str = "5m",
+                             progress_cb=None) -> dict:
+    """For each combo (specific param dict), slice the period into n_windows
+    sequential chunks and replay the combo against each. No IS/OOS split —
+    pure temporal stability check.
+
+    Returns:
+        {
+          "combos": [
+            {
+              "params": {...},
+              "windows": [{idx, start_ms, end_ms, trades, wr, pf, roi, max_dd}, ...],
+              "summary": {
+                "pct_positive_windows": float,
+                "worst_window_roi": float,
+                "median_window_roi": float,
+                "total_roi": float,
+                "n_windows": int,
+              }
+            },
+            ...
+          ]
+        }
+    """
+    if not combos:
+        return {"error": "combos vazio"}
+    if len(combos) > _MAX_REPLAY_COMBOS:
+        return {"error": f"Máximo {_MAX_REPLAY_COMBOS} combos por replay (recebeu {len(combos)})"}
+    if timeframe not in SUPPORTED_TIMEFRAMES:
+        return {"error": f"Timeframe inválido: {timeframe}"}
+    if n_windows < 2 or n_windows > 24:
+        return {"error": f"n_windows deve estar entre 2 e 24 (recebeu {n_windows})"}
+
+    mins = _tf_minutes(timeframe)
+
+    if timeframe == "5m":
+        try:
+            _update_csv(asset, progress_cb)
+        except Exception as e:
+            log.warning(f"[scanner_v2.replay] _update_csv failed: {e}")
+
+    df = _load_csv(asset, days + _SCAN_WARMUP_DAYS, timeframe=timeframe)
+    if df is None or len(df) < 100:
+        return {"error": f"CSV insuficiente para {asset}"}
+
+    last_ts = int(df["ts_ms"].iloc[-1])
+    real_start_ms = last_ts - days * 86_400_000
+
+    close_full = df["close"].values.astype(float)
+    high_full = df["high"].values.astype(float)
+    low_full = df["low"].values.astype(float)
+    ts_full = df["ts_ms"].values.astype(np.int64)
+
+    warmup_candles = int(_SCAN_WARMUP_DAYS * 86_400_000 / (mins * 60_000))
+    window_size_ms = int((days / n_windows) * 86_400_000)
+
+    out_combos = []
+    for ci, combo in enumerate(combos):
+        if progress_cb:
+            progress_cb(f"Replay combo {ci+1}/{len(combos)}")
+        windows_out = []
+        for w in range(n_windows):
+            w_start_ms = real_start_ms + w * window_size_ms
+            w_end_ms = w_start_ms + window_size_ms
+
+            slice_start_idx = int(np.argmax(ts_full >= w_start_ms))
+            if (ts_full >= w_end_ms).any():
+                w_end_idx = int(np.argmax(ts_full >= w_end_ms))
+            else:
+                w_end_idx = len(ts_full)
+            warmup_idx = max(0, slice_start_idx - warmup_candles)
+
+            close_slice = close_full[warmup_idx:w_end_idx]
+            high_slice = high_full[warmup_idx:w_end_idx]
+            low_slice = low_full[warmup_idx:w_end_idx]
+            ts_slice = ts_full[warmup_idx:w_end_idx]
+            if len(close_slice) < 50:
+                windows_out.append({
+                    "idx": w, "start_ms": int(w_start_ms), "end_ms": int(w_end_ms),
+                    "trades": 0, "wr": 0.0, "pf": 0.0, "roi": 0.0, "max_dd": 0.0,
+                    "skipped": True,
+                })
+                continue
+
+            close_s = pd.Series(close_slice)
+            high_s = pd.Series(high_slice)
+            low_s = pd.Series(low_slice)
+
+            stats = _replay_params_on_slice(
+                close_slice, high_slice, low_slice, ts_slice,
+                close_s, high_s, low_s, mins, combo,
+            )
+            if stats is None:
+                stats = {"trades": 0, "wr": 0.0, "pf": 0.0, "roi": 0.0, "max_dd": 0.0}
+            windows_out.append({
+                "idx": w,
+                "start_ms": int(w_start_ms),
+                "end_ms": int(w_end_ms),
+                "trades": stats.get("trades", 0),
+                "wr": stats.get("wr", 0.0),
+                "pf": stats.get("pf", 0.0),
+                "roi": stats.get("roi", 0.0),
+                "max_dd": stats.get("max_dd", 0.0),
+            })
+
+        rois = [w["roi"] for w in windows_out if not w.get("skipped")]
+        n_real = len(rois)
+        n_pos = sum(1 for r in rois if r > 0)
+        out_combos.append({
+            "params": combo,
+            "windows": windows_out,
+            "summary": {
+                "n_windows": n_real,
+                "pct_positive_windows": round(n_pos / n_real * 100, 1) if n_real else 0.0,
+                "worst_window_roi": round(min(rois), 2) if rois else 0.0,
+                "best_window_roi": round(max(rois), 2) if rois else 0.0,
+                "median_window_roi": round(float(np.median(rois)), 2) if rois else 0.0,
+                "total_roi": round(sum(rois), 2),
+            },
+        })
+
+    return {
+        "asset": asset,
+        "timeframe": timeframe,
+        "days": days,
+        "n_windows": n_windows,
+        "window_days": round(days / n_windows, 1),
+        "combos": out_combos,
+    }
+
+
+def start_replay_job(asset: str, combos: list[dict], n_windows: int = 6,
+                     days: int = 180, timeframe: str = "5m") -> str:
+    job_id = str(uuid.uuid4())
+    with _jobs_lock:
+        _jobs[job_id] = {"kind": "replay", "status": "running",
+                         "progress": "Iniciando replay...",
+                         "result": None, "error": None}
+
+    def _run():
+        try:
+            result = replay_combos_in_windows(
+                asset, combos, n_windows=n_windows, days=days, timeframe=timeframe,
+                progress_cb=_make_progress_cb(job_id),
+            )
+            with _jobs_lock:
+                if "error" in result:
+                    _jobs[job_id].update(status="error", error=result["error"])
+                else:
+                    _jobs[job_id].update(status="done", result=result)
+        except Exception as exc:
+            log.error(f"[scanner_v2.replay] Job {job_id} failed: {exc}")
+            with _jobs_lock:
+                _jobs[job_id].update(status="error", error=str(exc))
+
+    threading.Thread(target=_run, daemon=True).start()
+    return job_id
