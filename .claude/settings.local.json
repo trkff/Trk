@@ -51,7 +51,8 @@
       "Bash(pm2 save *)",
       "Bash(where pm2-startup *)",
       "Bash(pm2-startup install *)",
-      "Bash(reg query *)"
+      "Bash(reg query *)",
+      "Bash(gh repo *)"
     ],
     "defaultMode": "bypassPermissions"
   },

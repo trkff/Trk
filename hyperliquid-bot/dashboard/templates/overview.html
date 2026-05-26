@@ -87,6 +87,79 @@
 .ov-chip { display:inline-block;font-size:0.7rem;padding:2px 8px;border-radius:4px;font-family:'JetBrains Mono',monospace;margin-left:6px;vertical-align:middle; }
 .ov-chip-asset { background:#1E3A5F;color:#93C5FD; }
 .ov-chip-tag { background:#422006;color:#FBBF24; }
+
+/* Hover tooltip on strategy cards */
+.strategy-stat-card.has-tooltip { position:relative; }
+.strategy-tooltip {
+  position:absolute;
+  bottom:calc(100% + 8px);
+  left:50%;
+  transform:translateX(-50%) translateY(4px);
+  width:340px;
+  max-width:90vw;
+  background:#0A1018;
+  border:1px solid #1E3A5F;
+  border-radius:10px;
+  padding:12px;
+  box-shadow:0 8px 24px rgba(0,0,0,0.6);
+  opacity:0;
+  visibility:hidden;
+  pointer-events:none;
+  transition:opacity 0.15s ease, transform 0.15s ease;
+  z-index:50;
+}
+.strategy-stat-card.has-tooltip:hover .strategy-tooltip {
+  opacity:1;
+  visibility:visible;
+  transform:translateX(-50%) translateY(0);
+}
+.strategy-tooltip::after {
+  content:'';
+  position:absolute;
+  top:100%;
+  left:50%;
+  transform:translateX(-50%);
+  border:6px solid transparent;
+  border-top-color:#1E3A5F;
+}
+.tt-section-title {
+  font-size:0.65rem;
+  color:#64748B;
+  text-transform:uppercase;
+  letter-spacing:0.06em;
+  font-weight:600;
+  margin-bottom:6px;
+}
+.tt-metrics {
+  display:grid;
+  grid-template-columns:repeat(2,1fr);
+  gap:4px 12px;
+  background:#0F1923;
+  border-radius:6px;
+  padding:8px 10px;
+}
+.tt-metrics > div { display:flex;justify-content:space-between;align-items:baseline;gap:8px; }
+.tt-label { font-size:0.7rem;color:#64748B; }
+.tt-value { font-family:'JetBrains Mono',monospace;font-size:0.8rem;font-weight:600;color:#E2E8F0; }
+.tt-value.positive { color:#10B981; }
+.tt-value.negative { color:#EF4444; }
+.tt-params {
+  background:#0F1923;
+  border-radius:6px;
+  padding:8px 10px;
+  font-family:'JetBrains Mono',monospace;
+  font-size:0.7rem;
+  line-height:1.6;
+  color:#94A3B8;
+  overflow-wrap:anywhere;
+  word-break:break-word;
+  max-height:120px;
+  overflow-y:auto;
+}
+.tt-params .tt-k { color:#64748B; }
+.tt-params .tt-v { color:#E2E8F0; }
+.tt-params .tt-sep { color:#1E3A5F;margin:0 5px; }
+.tt-footer { font-size:0.65rem;color:#64748B;margin-top:8px;text-align:right; }
 </style>
 {% endblock %}
 
@@ -163,8 +236,64 @@ function strategyCardHTML(item) {
   const slipStr = slipPct !== null && slipPct !== undefined ? `${slipPct >= 0 ? '+' : ''}${slipPct.toFixed(4)}%` : '--';
   const slipCls = slipPct === null || slipPct === undefined ? '' : (slipPct <= 0.05 ? 'positive' : 'negative');
 
+  // Hover tooltip: scanner metrics + params (igual aba Estratégias)
+  const hasMetrics = m && Object.keys(m).length > 0;
+  let tooltipHTML = '';
+  if (hasMetrics || item.params) {
+    const fmtPct = v => (v == null ? '—' : (v * 100).toFixed(1) + '%');
+    const fmtNum = (v, d = 2) => (v == null ? '—' : Number(v).toFixed(d));
+    const tradesBT = m.trades ?? '—';
+    const wrBT     = fmtPct(m.wr);
+    const wrBtCls  = m.wr == null ? '' : (m.wr >= 0.55 ? 'positive' : 'negative');
+    const roiStr   = m.roi == null ? '—' : (m.roi > 0 ? '+' : '') + Number(m.roi).toFixed(2) + '%';
+    const roiCls   = m.roi == null ? '' : (m.roi > 0 ? 'positive' : 'negative');
+    const pfStr    = fmtNum(m.pf);
+    const pfCls    = m.pf == null ? '' : (m.pf >= 1.2 ? 'positive' : 'negative');
+    const tpdStr   = fmtNum(m.tpd, 1);
+    const ddStr    = m.max_dd == null ? '—' : fmtNum(m.max_dd, 1) + '%';
+    const ddCls    = m.max_dd == null ? '' : (m.max_dd < 20 ? 'positive' : 'negative');
+    const tfStr    = m.timeframe || '—';
+    const appliedAt = m.applied_at ? new Date(m.applied_at).toLocaleString('pt-BR') : '';
+
+    // Params raw (scanner_params se houver, senão item.params filtrado)
+    const PARAM_SKIP = new Set(['assets', 'asset_overrides']);
+    let paramSource = {};
+    if (m.scanner_params && Object.keys(m.scanner_params).length) {
+      paramSource = m.scanner_params;
+    } else if (item.params) {
+      paramSource = Object.fromEntries(
+        Object.entries(item.params).filter(([k, v]) =>
+          !PARAM_SKIP.has(k) &&
+          v !== null && v !== undefined && v !== '' &&
+          !(Array.isArray(v) && v.length === 0) &&
+          !(typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === 0)
+        )
+      );
+    }
+    const paramsLine = Object.entries(paramSource)
+      .map(([k, v]) => `<span class="tt-k">${k}</span>=<span class="tt-v">${v}</span>`)
+      .join('<span class="tt-sep">·</span>');
+
+    tooltipHTML = `
+      <div class="strategy-tooltip">
+        <div class="tt-section-title">Scanner (backtest)</div>
+        <div class="tt-metrics">
+          <div><span class="tt-label">TF</span><span class="tt-value">${tfStr}</span></div>
+          <div><span class="tt-label">Trades</span><span class="tt-value">${tradesBT}</span></div>
+          <div><span class="tt-label">WR</span><span class="tt-value ${wrBtCls}">${wrBT}</span></div>
+          <div><span class="tt-label">ROI</span><span class="tt-value ${roiCls}">${roiStr}</span></div>
+          <div><span class="tt-label">PF</span><span class="tt-value ${pfCls}">${pfStr}</span></div>
+          <div><span class="tt-label">Trades/dia</span><span class="tt-value">${tpdStr}</span></div>
+          <div><span class="tt-label">Max DD</span><span class="tt-value ${ddCls}">${ddStr}</span></div>
+        </div>
+        ${paramsLine ? `<div class="tt-section-title" style="margin-top:8px;">Parâmetros</div><div class="tt-params">${paramsLine}</div>` : ''}
+        ${appliedAt ? `<div class="tt-footer">Aplicado em ${appliedAt}</div>` : ''}
+      </div>
+    `;
+  }
+
   return `
-    <div class="position-card strategy-stat-card" style="${enabled ? '' : 'opacity:0.55;'}">
+    <div class="position-card strategy-stat-card has-tooltip" style="${enabled ? '' : 'opacity:0.55;'}">
       <div class="position-header" style="align-items:flex-start;">
         <div>
           <span class="position-asset">${stratLabel}${assetChip}${tagChip}${openBadge}</span>
@@ -179,6 +308,7 @@ function strategyCardHTML(item) {
         <dt>P&L</dt><dd class="${pnlCls}">${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}</dd>
         <dt>Slippage</dt><dd class="${slipCls}">${slipStr}</dd>
       </dl>
+      ${tooltipHTML}
     </div>
   `;
 }

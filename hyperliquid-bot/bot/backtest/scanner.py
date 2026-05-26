@@ -95,18 +95,19 @@ def get_available_assets(timeframe: str = "5m") -> list[str]:
 def _backtest(sig_long: np.ndarray, sig_short: np.ndarray,
               close: np.ndarray, high: np.ndarray, low: np.ndarray,
               tp_pct: float, sl_pct: float,
-              bb_mid: np.ndarray | None = None) -> list[float]:
+              bb_mid: np.ndarray | None = None) -> list[tuple[float, int]]:
     """
     Bar-by-bar simulation. No overlap between trades.
 
     Per-candle priority: SL > TP > BB-mid (matches engine.py).
     On a same-bar SL+TP hit, SL always wins (pessimistic).
 
-    Returns list of trade returns in percent:
+    Returns list of (return_pct, entry_idx) tuples:
       - +tp_pct on TP, -sl_pct on SL
       - Actual percent change (close vs entry) on BB-mid exit
+      - entry_idx é o índice do candle de entrada (usado pelo breakdown mensal)
     """
-    trades: list[float] = []
+    trades: list[tuple[float, int]] = []
     N = len(close)
     i = 0
     while i < N - 1:
@@ -149,14 +150,14 @@ def _backtest(sig_long: np.ndarray, sig_short: np.ndarray,
         if outcome:
             kind, j_exit = outcome
             if kind == "win":
-                trades.append(tp_pct)
+                trades.append((tp_pct, i))
             elif kind == "loss":
-                trades.append(-sl_pct)
+                trades.append((-sl_pct, i))
             else:  # bb_mid — actual percent change
                 ret = (close[j_exit] - entry) / entry * 100
                 if not is_long:
                     ret = -ret
-                trades.append(float(ret))
+                trades.append((float(ret), i))
             i = j_exit + 1
         else:
             i += 1
@@ -166,10 +167,45 @@ def _backtest(sig_long: np.ndarray, sig_short: np.ndarray,
 
 # ── Stats ──────────────────────────────────────────────────────────────────
 
-def _stats(trades: list[float], n_candles: int, mins_per_candle: int = 5) -> dict | None:
-    if len(trades) < APPROVAL["min_trades"]:
+def _monthly_breakdown(trades_with_idx: list[tuple[float, int]],
+                       ts_ms: np.ndarray) -> list[dict]:
+    """Agrupa trades por mês calendário (YYYY-MM) usando ts_ms[entry_idx].
+    Retorna lista ordenada por mês: [{month, trades, wr, roi, pf}, ...]"""
+    if not trades_with_idx or ts_ms is None or len(ts_ms) == 0:
+        return []
+    buckets: dict[str, list[float]] = {}
+    for ret, idx in trades_with_idx:
+        if idx < 0 or idx >= len(ts_ms):
+            continue
+        month = pd.Timestamp(int(ts_ms[idx]), unit="ms", tz="UTC").strftime("%Y-%m")
+        buckets.setdefault(month, []).append(ret)
+    out = []
+    for month in sorted(buckets):
+        rets = buckets[month]
+        wins = [t for t in rets if t > 0]
+        losses = [t for t in rets if t <= 0]
+        wr = len(wins) / len(rets) if rets else 0.0
+        gp = sum(wins)
+        gl = abs(sum(losses)) if losses else 0.0
+        pf = gp / gl if gl > 0 else (999.0 if gp > 0 else 0.0)
+        out.append({
+            "month":  month,
+            "trades": len(rets),
+            "wr":     round(wr, 4),
+            "roi":    round(sum(rets), 2),
+            "pf":     round(pf, 4),
+        })
+    return out
+
+
+def _stats(trades_with_idx: list[tuple[float, int]],
+           n_candles: int,
+           mins_per_candle: int = 5,
+           ts_ms: np.ndarray | None = None) -> dict | None:
+    if len(trades_with_idx) < APPROVAL["min_trades"]:
         return None
 
+    trades = [t[0] for t in trades_with_idx]
     wins   = [t for t in trades if t > 0]
     losses = [t for t in trades if t <= 0]
     wr  = len(wins) / len(trades)
@@ -197,7 +233,7 @@ def _stats(trades: list[float], n_candles: int, mins_per_candle: int = 5) -> dic
         max_dd <= APPROVAL["max_dd_max"]
     )
 
-    return {
+    result = {
         "trades": len(trades),
         "wr":     round(wr, 4),
         "pf":     round(pf, 4),
@@ -206,6 +242,10 @@ def _stats(trades: list[float], n_candles: int, mins_per_candle: int = 5) -> dic
         "max_dd": round(max_dd, 2),
         "approved": approved,
     }
+    # Só adiciona breakdown se ts_ms passado E período cobre >1 mês
+    if ts_ms is not None and total_days >= 31:
+        result["monthly"] = _monthly_breakdown(trades_with_idx, ts_ms)
+    return result
 
 
 # ── Indicator helpers ──────────────────────────────────────────────────────
@@ -288,7 +328,7 @@ def _scale_tp_sl(tps: list[float], sls: list[float], mins: int) -> tuple[list[fl
 
 # ── Strategy scanners ──────────────────────────────────────────────────────
 
-def _scan_bb_stoch(close, high, low, n, close_s, high_s, low_s, cb, *, window_start_idx: int = 0, mins: int = 5):
+def _scan_bb_stoch(close, high, low, n, close_s, high_s, low_s, cb, *, window_start_idx: int = 0, mins: int = 5, ts_ms=None):
     BB_PERIODS  = [10, 15]
     BB_STDS     = [1.5, 2.0]
     BBP_THS     = [0.05, 0.10, 0.15]
@@ -321,7 +361,7 @@ def _scan_bb_stoch(close, high, low, n, close_s, high_s, low_s, cb, *, window_st
         sl_long, sl_short = _apply_window(sl_long, sl_short, window_start_idx)
 
         bb_mid_arr = bbm[bbp] if bme else None
-        s = _stats(_backtest(sl_long, sl_short, close, high, low, tp, sl, bb_mid=bb_mid_arr), n, mins)
+        s = _stats(_backtest(sl_long, sl_short, close, high, low, tp, sl, bb_mid=bb_mid_arr), n, mins, ts_ms=ts_ms)
         if s:
             results.append({"strategy": "BB_Stoch",
                             "bb_period": bbp, "bb_std": bbs, "bbp_th": bbp_th,
@@ -331,7 +371,7 @@ def _scan_bb_stoch(close, high, low, n, close_s, high_s, low_s, cb, *, window_st
     return results
 
 
-def _scan_stoch_scalp(close, high, low, n, close_s, high_s, low_s, cb, *, window_start_idx: int = 0, mins: int = 5):
+def _scan_stoch_scalp(close, high, low, n, close_s, high_s, low_s, cb, *, window_start_idx: int = 0, mins: int = 5, ts_ms=None):
     K_PERIODS  = [5, 9, 14]
     OS_LEVELS  = [30, 40, 50]
     TREND_EMAS = [0, 50, 200]
@@ -359,7 +399,7 @@ def _scan_stoch_scalp(close, high, low, n, close_s, high_s, low_s, cb, *, window
         sl_long, sl_short = _apply_ema_filter(sl_long, sl_short, close, ema, te)
         sl_long, sl_short = _apply_window(sl_long, sl_short, window_start_idx)
 
-        s = _stats(_backtest(sl_long, sl_short, close, high, low, tp, sl), n, mins)
+        s = _stats(_backtest(sl_long, sl_short, close, high, low, tp, sl), n, mins, ts_ms=ts_ms)
         if s:
             results.append({"strategy": "Stoch_Scalp",
                             "k_period": kp, "os": os_lvl,
@@ -367,7 +407,7 @@ def _scan_stoch_scalp(close, high, low, n, close_s, high_s, low_s, cb, *, window
     return results
 
 
-def _scan_ema_cross(close, high, low, n, close_s, high_s, low_s, cb, *, window_start_idx: int = 0, mins: int = 5):
+def _scan_ema_cross(close, high, low, n, close_s, high_s, low_s, cb, *, window_start_idx: int = 0, mins: int = 5, ts_ms=None):
     PAIRS      = [(3, 8), (5, 13), (9, 21), (3, 13), (8, 21)]
     TREND_EMAS = [0, 50, 200]
     TPS        = [0.5, 1.0, 1.5]
@@ -393,7 +433,7 @@ def _scan_ema_cross(close, high, low, n, close_s, high_s, low_s, cb, *, window_s
         sl_long, sl_short = _apply_ema_filter(sl_long, sl_short, close, ema, te)
         sl_long, sl_short = _apply_window(sl_long, sl_short, window_start_idx)
 
-        s = _stats(_backtest(sl_long, sl_short, close, high, low, tp, sl), n, mins)
+        s = _stats(_backtest(sl_long, sl_short, close, high, low, tp, sl), n, mins, ts_ms=ts_ms)
         if s:
             results.append({"strategy": "EMA_Cross",
                             "ema_fast": fp, "ema_slow": sp,
@@ -401,7 +441,7 @@ def _scan_ema_cross(close, high, low, n, close_s, high_s, low_s, cb, *, window_s
     return results
 
 
-def _scan_bb_reversion(close, high, low, n, close_s, high_s, low_s, cb, *, window_start_idx: int = 0, mins: int = 5):
+def _scan_bb_reversion(close, high, low, n, close_s, high_s, low_s, cb, *, window_start_idx: int = 0, mins: int = 5, ts_ms=None):
     BB_PERIODS = [10, 15, 20]
     BB_STDS    = [1.5, 2.0, 2.5]
     BBP_THS    = [0.05, 0.10, 0.15, 0.20]
@@ -444,7 +484,7 @@ def _scan_bb_reversion(close, high, low, n, close_s, high_s, low_s, cb, *, windo
         sl_long, sl_short = _apply_window(sl_long, sl_short, window_start_idx)
 
         bb_mid_arr = BBM if bme else None
-        s = _stats(_backtest(sl_long, sl_short, close, high, low, tp, sl, bb_mid=bb_mid_arr), n, mins)
+        s = _stats(_backtest(sl_long, sl_short, close, high, low, tp, sl, bb_mid=bb_mid_arr), n, mins, ts_ms=ts_ms)
         if s:
             results.append({"strategy": "BB_Reversion",
                             "bb_period": bbp, "bb_std": bbs, "bbp_th": bbp_th,
@@ -457,7 +497,7 @@ def _rsi_cache(close_s: pd.Series, periods: list[int]) -> dict[int, np.ndarray]:
     return {p: ta.rsi(close_s, length=p).values.astype(float) for p in periods}
 
 
-def _scan_rsi_scalp(close, high, low, n, close_s, high_s, low_s, cb, *, window_start_idx: int = 0, mins: int = 5):
+def _scan_rsi_scalp(close, high, low, n, close_s, high_s, low_s, cb, *, window_start_idx: int = 0, mins: int = 5, ts_ms=None):
     RSI_PERIODS = [7, 14]
     OS_LEVELS   = [25, 30, 35, 40]
     TREND_EMAS  = [0, 50, 200]
@@ -484,7 +524,7 @@ def _scan_rsi_scalp(close, high, low, n, close_s, high_s, low_s, cb, *, window_s
         sl_long, sl_short = _apply_ema_filter(sl_long, sl_short, close, ema, te)
         sl_long, sl_short = _apply_window(sl_long, sl_short, window_start_idx)
 
-        s = _stats(_backtest(sl_long, sl_short, close, high, low, tp, sl), n, mins)
+        s = _stats(_backtest(sl_long, sl_short, close, high, low, tp, sl), n, mins, ts_ms=ts_ms)
         if s:
             results.append({"strategy": "RSI_Scalp",
                             "rsi_period": rp, "os": os_lvl,
@@ -492,7 +532,7 @@ def _scan_rsi_scalp(close, high, low, n, close_s, high_s, low_s, cb, *, window_s
     return results
 
 
-def _scan_bb_rsi(close, high, low, n, close_s, high_s, low_s, cb, *, window_start_idx: int = 0, mins: int = 5):
+def _scan_bb_rsi(close, high, low, n, close_s, high_s, low_s, cb, *, window_start_idx: int = 0, mins: int = 5, ts_ms=None):
     BB_PERIODS  = [10, 15]
     BB_STDS     = [1.5, 2.0]
     BBP_THS     = [0.05, 0.10, 0.15]
@@ -526,7 +566,7 @@ def _scan_bb_rsi(close, high, low, n, close_s, high_s, low_s, cb, *, window_star
         sl_long, sl_short = _apply_window(sl_long, sl_short, window_start_idx)
 
         bb_mid_arr = bbm[bbp] if bme else None
-        s = _stats(_backtest(sl_long, sl_short, close, high, low, tp, sl, bb_mid=bb_mid_arr), n, mins)
+        s = _stats(_backtest(sl_long, sl_short, close, high, low, tp, sl, bb_mid=bb_mid_arr), n, mins, ts_ms=ts_ms)
         if s:
             results.append({"strategy": "BB_RSI",
                             "bb_period": bbp, "bb_std": bbs, "bbp_th": bbp_th,
@@ -536,7 +576,7 @@ def _scan_bb_rsi(close, high, low, n, close_s, high_s, low_s, cb, *, window_star
     return results
 
 
-def _scan_macd_cross(close, high, low, n, close_s, high_s, low_s, cb, *, window_start_idx: int = 0, mins: int = 5):
+def _scan_macd_cross(close, high, low, n, close_s, high_s, low_s, cb, *, window_start_idx: int = 0, mins: int = 5, ts_ms=None):
     MACD_COMBOS = [(8, 21, 7), (8, 21, 9), (12, 26, 7), (12, 26, 9), (8, 26, 9)]
     TREND_EMAS  = [0, 50, 200]
     TPS         = [0.5, 1.0, 1.5]
@@ -571,7 +611,7 @@ def _scan_macd_cross(close, high, low, n, close_s, high_s, low_s, cb, *, window_
         sl_long, sl_short = _apply_ema_filter(sl_long, sl_short, close, ema, te)
         sl_long, sl_short = _apply_window(sl_long, sl_short, window_start_idx)
 
-        s = _stats(_backtest(sl_long, sl_short, close, high, low, tp, sl), n, mins)
+        s = _stats(_backtest(sl_long, sl_short, close, high, low, tp, sl), n, mins, ts_ms=ts_ms)
         if s:
             results.append({"strategy": "MACD_Cross",
                             "macd_fast": fast, "macd_slow": slow, "macd_sig": sig,
@@ -579,7 +619,7 @@ def _scan_macd_cross(close, high, low, n, close_s, high_s, low_s, cb, *, window_
     return results
 
 
-def _scan_williams_r(close, high, low, n, close_s, high_s, low_s, cb, *, window_start_idx: int = 0, mins: int = 5):
+def _scan_williams_r(close, high, low, n, close_s, high_s, low_s, cb, *, window_start_idx: int = 0, mins: int = 5, ts_ms=None):
     WR_PERIODS = [7, 14]
     OS_LEVELS  = [-80, -70, -60]   # Williams %R: -100=oversold, 0=overbought
     TREND_EMAS = [0, 50, 200]
@@ -607,7 +647,7 @@ def _scan_williams_r(close, high, low, n, close_s, high_s, low_s, cb, *, window_
         sl_long, sl_short = _apply_ema_filter(sl_long, sl_short, close, ema, te)
         sl_long, sl_short = _apply_window(sl_long, sl_short, window_start_idx)
 
-        s = _stats(_backtest(sl_long, sl_short, close, high, low, tp, sl), n, mins)
+        s = _stats(_backtest(sl_long, sl_short, close, high, low, tp, sl), n, mins, ts_ms=ts_ms)
         if s:
             results.append({"strategy": "Williams_R",
                             "wr_period": wp, "os": os_lvl,
@@ -665,6 +705,7 @@ def run_scan(asset: str, days: int = 90,
     close = df["close"].values.astype(float)
     high  = df["high"].values.astype(float)
     low   = df["low"].values.astype(float)
+    ts_ms = df["ts_ms"].values.astype(np.int64)
     n_real = len(close) - window_start_idx  # number of candles in the "real" window — used for TPD
 
     close_s = pd.Series(close)
@@ -679,7 +720,7 @@ def run_scan(asset: str, days: int = 90,
         if progress_cb:
             progress_cb(f"Escaneando {strat}...")
         results = fn(close, high, low, n_real, close_s, high_s, low_s, progress_cb,
-                     window_start_idx=window_start_idx, mins=mins)
+                     window_start_idx=window_start_idx, mins=mins, ts_ms=ts_ms)
         # Marca cada resultado com o timeframe — necessário para Apply / display
         for r in results:
             r["tf"] = timeframe

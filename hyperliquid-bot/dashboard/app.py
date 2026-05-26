@@ -172,9 +172,12 @@ def create_app():
             if key.startswith("strategy.") and key.endswith(".scanner_metrics"):
                 inst_name = key[len("strategy."):-len(".scanner_metrics")]
                 try:
-                    metrics_by_name[inst_name] = _json.loads(val)
+                    m = _json.loads(val)
                 except _json.JSONDecodeError:
-                    pass
+                    continue
+                if m.get("archived"):
+                    continue
+                metrics_by_name[inst_name] = m
 
         candidates = set(metrics_by_name.keys())
         for key, val in all_cfg.items():
@@ -234,6 +237,7 @@ def create_app():
                 "name": inst_name,
                 "display_name": STRATEGY_MAP[inst_name].DISPLAY_NAME,
                 "enabled": scfg["enabled"],
+                "archived": bool(m.get("archived", False)),
                 "asset": m.get("asset"),
                 "tag": m.get("tag"),
                 "timeframe": m.get("timeframe") or "5m",
@@ -259,13 +263,20 @@ def create_app():
 
     @app.route("/api/strategies/applied/<name>", methods=["DELETE"])
     def api_strategy_applied_delete(name):
-        """Remove uma estratégia da aba Estratégias: apaga scanner_metrics e desativa."""
+        """Soft-delete: marca scanner_metrics como archived=true e desativa.
+        A aba Estratégias filtra arquivadas; a aba Análise continua incluindo (para
+        preservar histórico de scanner_metrics × performance live)."""
+        import json as _json
         db.set_config(f"strategy.{name}.enabled", "false")
-        # Apaga o marker scanner_metrics — assim some da aba Estratégias
-        conn = db.get_conn()
-        conn.execute("DELETE FROM config WHERE key = ?", (f"strategy.{name}.scanner_metrics",))
-        conn.commit()
-        log.info(f"Strategy '{name}' removida da aba Estratégias")
+        raw = db.get_config(f"strategy.{name}.scanner_metrics")
+        if raw:
+            try:
+                m = _json.loads(raw)
+            except _json.JSONDecodeError:
+                m = {}
+            m["archived"] = True
+            db.set_config(f"strategy.{name}.scanner_metrics", _json.dumps(m))
+        log.info(f"Strategy '{name}' arquivada (some da aba Estratégias; permanece em Análise)")
         return jsonify({"ok": True})
 
     @app.route("/api/backtest/run", methods=["POST"])
