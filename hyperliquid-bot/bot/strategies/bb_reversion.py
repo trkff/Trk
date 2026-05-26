@@ -30,6 +30,7 @@ import pandas_ta as ta
 from bot.logger import get_logger
 from bot import db
 from bot.strategies.base import BaseStrategy, select_tf_df
+from bot.strategies.live_filters import apply_live_filters
 
 log = get_logger("strategies.bb_reversion")
 
@@ -50,6 +51,15 @@ class BBReversionStrategy(BaseStrategy):
         "bb_mid_exit": True,
         "bbp_long_threshold":  0.05,
         "bbp_short_threshold": 0.95,
+        # ── Live filters (scanner v2) — defaults = off ──
+        "adx_period":    0,
+        "adx_min":       0,
+        "session_start": 0,
+        "session_end":   24,
+        "atr_tp_mode":   False,
+        "atr_tp_mult":   1.0,
+        "atr_sl_mult":   1.0,
+        "atr_period":    14,
         "assets": [],
         "asset_overrides": {},
     }
@@ -171,7 +181,7 @@ class BBReversionStrategy(BaseStrategy):
                 f"BBP_prev={bbp_prev:.3f} RSI={rsi_val:.1f} "
                 f"EMA{ema_period}={ema_val:.2f} close={close_curr:.2f}"
             )
-            return {
+            return apply_live_filters(p, df, {
                 **base,
                 "side": "long",
                 "signal_price": close_curr,
@@ -179,7 +189,7 @@ class BBReversionStrategy(BaseStrategy):
                 "sl_pct": sl_pct,
                 "bb_mid": bbm_curr,
                 "bb_mid_exit": bb_mid_exit,
-            }
+            }, is_trend_strategy=False)
 
         # ── SHORT ─────────────────────────────────────────────────────
         if short_trigger:
@@ -198,7 +208,7 @@ class BBReversionStrategy(BaseStrategy):
                 f"BBP_prev={bbp_prev:.3f} RSI={rsi_val:.1f} "
                 f"EMA{ema_period}={ema_val:.2f} close={close_curr:.2f}"
             )
-            return {
+            return apply_live_filters(p, df, {
                 **base,
                 "side": "short",
                 "signal_price": close_curr,
@@ -206,6 +216,6 @@ class BBReversionStrategy(BaseStrategy):
                 "sl_pct": sl_pct,
                 "bb_mid": bbm_curr,
                 "bb_mid_exit": bb_mid_exit,
-            }
+            }, is_trend_strategy=False)
 
         return None

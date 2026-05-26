@@ -21,6 +21,7 @@ import pandas_ta as ta
 
 from bot.logger import get_logger
 from bot.strategies.base import BaseStrategy, select_tf_df
+from bot.strategies.live_filters import apply_live_filters
 
 log = get_logger("strategies.macd_cross")
 
@@ -37,6 +38,15 @@ class MACDCrossStrategy(BaseStrategy):
         "tp_pct":      1.0,
         "sl_pct":      0.5,
         "ema_trend":   0,
+        # ── Live filters (scanner v2) — defaults = off ──
+        "adx_period":    0,
+        "adx_min":       0,
+        "session_start": 0,
+        "session_end":   24,
+        "atr_tp_mode":   False,
+        "atr_tp_mult":   1.0,
+        "atr_sl_mult":   1.0,
+        "atr_period":    14,
         "assets":      [],
         "asset_overrides": {},
     }
@@ -136,7 +146,7 @@ class MACDCrossStrategy(BaseStrategy):
                 f"close={close_curr:.4f} MACD={curr_macd:.4f} SIG={curr_sig:.4f} "
                 f"tp={tp_pct:.3%} sl={sl_pct:.3%}"
             )
-            return {
+            return apply_live_filters(p, df, {
                 **base,
                 "side": "long",
                 "signal_price": close_curr,
@@ -144,7 +154,7 @@ class MACDCrossStrategy(BaseStrategy):
                 "sl_pct": sl_pct,
                 "bb_mid": None,
                 "bb_mid_exit": False,
-            }
+            }, is_trend_strategy=True)
 
         # ── SHORT: MACD crosses below signal ─────────────────────────
         if curr_macd < curr_sig and prev_macd >= prev_sig:
@@ -155,7 +165,7 @@ class MACDCrossStrategy(BaseStrategy):
                 f"close={close_curr:.4f} MACD={curr_macd:.4f} SIG={curr_sig:.4f} "
                 f"tp={tp_pct:.3%} sl={sl_pct:.3%}"
             )
-            return {
+            return apply_live_filters(p, df, {
                 **base,
                 "side": "short",
                 "signal_price": close_curr,
@@ -163,6 +173,6 @@ class MACDCrossStrategy(BaseStrategy):
                 "sl_pct": sl_pct,
                 "bb_mid": None,
                 "bb_mid_exit": False,
-            }
+            }, is_trend_strategy=True)
 
         return None

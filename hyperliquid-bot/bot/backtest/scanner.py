@@ -772,6 +772,19 @@ def run_scan(asset: str, days: int = 90,
 
 
 def _translate_params(strategy: str, params: dict) -> dict:
+    # Live filter fields shared by ALL strategies (scanner v2).
+    # Estes 7 campos chegam dos resultados do scanner_v2 com defaults seguros
+    # (= filtro off) quando vêm do scanner antigo. A engine live agora consome
+    # estes params via bot/strategies/live_filters.py.
+    _live_filters = {
+        "adx_period":    int(params.get("adx_period", 0)),
+        "adx_min":       float(params.get("adx_min", 0)),
+        "session_start": int(params.get("session_start", 0)),
+        "session_end":   int(params.get("session_end", 24)),
+        "atr_tp_mode":   bool(params.get("atr_tp_mode", False)),
+        "atr_tp_mult":   float(params.get("atr_tp_mult", 1.0)),
+        "atr_sl_mult":   float(params.get("atr_sl_mult", 1.0)),
+    }
     if strategy == "BB_Stoch":
         th = float(params.get("bbp_th", 0.10))
         return {
@@ -786,6 +799,7 @@ def _translate_params(strategy: str, params: dict) -> dict:
             "tp_pct":              params.get("tp"),
             "sl_pct":              params.get("sl"),
             "bb_mid_exit":         bool(params.get("bb_mid_exit", False)),
+            **_live_filters,
         }
     if strategy == "Stoch_Scalp":
         return {
@@ -794,6 +808,7 @@ def _translate_params(strategy: str, params: dict) -> dict:
             "ema_period": params.get("trend_ema", 0),
             "tp_pct":     params.get("tp"),
             "sl_pct":     params.get("sl"),
+            **_live_filters,
         }
     if strategy == "EMA_Cross":
         return {
@@ -803,6 +818,7 @@ def _translate_params(strategy: str, params: dict) -> dict:
             "tp_pct":     params.get("tp"),
             "sl_pct":     params.get("sl"),
             "use_atr_sl": False,  # scanner usa sl_pct fixo, força fixed-mode mesmo em instância com ATR
+            **_live_filters,
         }
     if strategy == "BB_Reversion":
         th = float(params.get("bbp_th", 0.10))
@@ -817,6 +833,7 @@ def _translate_params(strategy: str, params: dict) -> dict:
             "rsi_long_max":        100,    # scanner não modela RSI guard — desabilita
             "rsi_short_min":       0,
             "bb_mid_exit":         bool(params.get("bb_mid_exit", False)),
+            **_live_filters,
         }
     if strategy == "RSI_Scalp":
         return {
@@ -825,6 +842,7 @@ def _translate_params(strategy: str, params: dict) -> dict:
             "ema_period": params.get("trend_ema", 0),
             "tp_pct":     params.get("tp"),
             "sl_pct":     params.get("sl"),
+            **_live_filters,
         }
     if strategy == "BB_RSI":
         th = float(params.get("bbp_th", 0.10))
@@ -839,6 +857,7 @@ def _translate_params(strategy: str, params: dict) -> dict:
             "tp_pct":              params.get("tp"),
             "sl_pct":              params.get("sl"),
             "bb_mid_exit":         bool(params.get("bb_mid_exit", False)),
+            **_live_filters,
         }
     if strategy == "MACD_Cross":
         return {
@@ -848,6 +867,7 @@ def _translate_params(strategy: str, params: dict) -> dict:
             "ema_trend":   params.get("trend_ema", 0),
             "tp_pct":      params.get("tp"),
             "sl_pct":      params.get("sl"),
+            **_live_filters,
         }
     if strategy == "Williams_R":
         return {
@@ -856,6 +876,7 @@ def _translate_params(strategy: str, params: dict) -> dict:
             "ema_period": params.get("trend_ema", 0),
             "tp_pct":    params.get("tp"),
             "sl_pct":    params.get("sl"),
+            **_live_filters,
         }
     return {}
 

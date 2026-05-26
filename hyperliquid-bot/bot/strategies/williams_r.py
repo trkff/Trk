@@ -24,6 +24,7 @@ import pandas_ta as ta
 
 from bot.logger import get_logger
 from bot.strategies.base import BaseStrategy, select_tf_df
+from bot.strategies.live_filters import apply_live_filters
 
 log = get_logger("strategies.williams_r")
 
@@ -39,6 +40,15 @@ class WilliamsRStrategy(BaseStrategy):
         "tp_pct":     0.8,
         "sl_pct":     0.8,
         "ema_period": 0,
+        # ── Live filters (scanner v2) — defaults = off ──
+        "adx_period":    0,
+        "adx_min":       0,
+        "session_start": 0,
+        "session_end":   24,
+        "atr_tp_mode":   False,
+        "atr_tp_mult":   1.0,
+        "atr_sl_mult":   1.0,
+        "atr_period":    14,
         "assets":     [],
         "asset_overrides": {},
     }
@@ -123,7 +133,7 @@ class WilliamsRStrategy(BaseStrategy):
                 f"close={close_curr:.4f} prevWR={prev_wr:.1f} currWR={curr_wr:.1f} "
                 f"os={wr_os:.0f} tp={tp_pct:.3%} sl={sl_pct:.3%}"
             )
-            return {
+            return apply_live_filters(p, df, {
                 **base,
                 "side": "long",
                 "signal_price": close_curr,
@@ -131,7 +141,7 @@ class WilliamsRStrategy(BaseStrategy):
                 "sl_pct": sl_pct,
                 "bb_mid": None,
                 "bb_mid_exit": False,
-            }
+            }, is_trend_strategy=False)
 
         # ── SHORT: %R exits overbought zone ──────────────────────────
         if prev_wr > wr_ob and curr_wr <= wr_ob:
@@ -142,7 +152,7 @@ class WilliamsRStrategy(BaseStrategy):
                 f"close={close_curr:.4f} prevWR={prev_wr:.1f} currWR={curr_wr:.1f} "
                 f"ob={wr_ob:.0f} tp={tp_pct:.3%} sl={sl_pct:.3%}"
             )
-            return {
+            return apply_live_filters(p, df, {
                 **base,
                 "side": "short",
                 "signal_price": close_curr,
@@ -150,6 +160,6 @@ class WilliamsRStrategy(BaseStrategy):
                 "sl_pct": sl_pct,
                 "bb_mid": None,
                 "bb_mid_exit": False,
-            }
+            }, is_trend_strategy=False)
 
         return None

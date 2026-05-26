@@ -22,6 +22,7 @@ import pandas_ta as ta
 
 from bot.logger import get_logger
 from bot.strategies.base import BaseStrategy, select_tf_df
+from bot.strategies.live_filters import apply_live_filters
 
 log = get_logger("strategies.rsi_scalp")
 
@@ -37,6 +38,15 @@ class RSIScalpStrategy(BaseStrategy):
         "tp_pct":     0.8,
         "sl_pct":     0.8,
         "ema_period": 0,
+        # ── Live filters (scanner v2) — defaults = off ──
+        "adx_period":    0,
+        "adx_min":       0,
+        "session_start": 0,
+        "session_end":   24,
+        "atr_tp_mode":   False,
+        "atr_tp_mult":   1.0,
+        "atr_sl_mult":   1.0,
+        "atr_period":    14,
         "assets":     [],
         "asset_overrides": {},
     }
@@ -121,7 +131,7 @@ class RSIScalpStrategy(BaseStrategy):
                 f"close={close_curr:.4f} prevRSI={prev_rsi:.1f} currRSI={curr_rsi:.1f} "
                 f"os={rsi_os:.0f} tp={tp_pct:.3%} sl={sl_pct:.3%}"
             )
-            return {
+            return apply_live_filters(p, df, {
                 **base,
                 "side": "long",
                 "signal_price": close_curr,
@@ -129,7 +139,7 @@ class RSIScalpStrategy(BaseStrategy):
                 "sl_pct": sl_pct,
                 "bb_mid": None,
                 "bb_mid_exit": False,
-            }
+            }, is_trend_strategy=False)
 
         # ── SHORT: RSI crosses out of overbought ─────────────────────
         if prev_rsi > rsi_ob and curr_rsi <= rsi_ob:
@@ -140,7 +150,7 @@ class RSIScalpStrategy(BaseStrategy):
                 f"close={close_curr:.4f} prevRSI={prev_rsi:.1f} currRSI={curr_rsi:.1f} "
                 f"ob={rsi_ob:.0f} tp={tp_pct:.3%} sl={sl_pct:.3%}"
             )
-            return {
+            return apply_live_filters(p, df, {
                 **base,
                 "side": "short",
                 "signal_price": close_curr,
@@ -148,6 +158,6 @@ class RSIScalpStrategy(BaseStrategy):
                 "sl_pct": sl_pct,
                 "bb_mid": None,
                 "bb_mid_exit": False,
-            }
+            }, is_trend_strategy=False)
 
         return None

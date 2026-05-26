@@ -22,6 +22,7 @@ import pandas_ta as ta
 
 from bot.logger import get_logger
 from bot.strategies.base import BaseStrategy, select_tf_df
+from bot.strategies.live_filters import apply_live_filters
 
 log = get_logger("strategies.ema_cross")
 
@@ -40,6 +41,18 @@ class EMACrossStrategy(BaseStrategy):
         "use_atr_sl": False,
         "atr_period": 14,
         "atr_mult":   1.0,
+        # ── Live filters (scanner v2) — defaults = off ──
+        # NB: atr_period acima já existe (compartilhado com use_atr_sl).
+        # atr_tp_mode aqui é independente — quando True, sobrescreve TANTO
+        # tp_pct quanto sl_pct (via apply_atr_tp_sl), tomando precedência
+        # sobre use_atr_sl que só mexe em SL.
+        "adx_period":    0,
+        "adx_min":       0,
+        "session_start": 0,
+        "session_end":   24,
+        "atr_tp_mode":   False,
+        "atr_tp_mult":   1.0,
+        "atr_sl_mult":   1.0,
         "assets":     [],
         "asset_overrides": {},
     }
@@ -172,7 +185,7 @@ class EMACrossStrategy(BaseStrategy):
             }
             if atr_sl_dist is not None:
                 sig["atr_sl_dist"] = float(atr_sl_dist)
-            return sig
+            return apply_live_filters(p, df, sig, is_trend_strategy=True)
 
         # ── SHORT: fast crosses below slow ────────────────────────────
         if prev_fast >= prev_slow and curr_fast < curr_slow:
@@ -199,6 +212,6 @@ class EMACrossStrategy(BaseStrategy):
             }
             if atr_sl_dist is not None:
                 sig["atr_sl_dist"] = float(atr_sl_dist)
-            return sig
+            return apply_live_filters(p, df, sig, is_trend_strategy=True)
 
         return None
