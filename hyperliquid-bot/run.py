@@ -40,11 +40,23 @@ def main():
     app, socketio = create_app()
     log.info("Dashboard available at http://localhost:8080")
 
-    # Auto-restart bot if it was running before pm2 restart
-    if db.is_configured() and db.get_config("bot_status") in ("running", "paused"):
-        log.info("Bot was running before restart — auto-starting...")
-        from main import start_bot
-        start_bot()
+    # Auto-restart bots for every profile whose status was running/paused before
+    # the process restarted (pm2, manual reboot, ...). Each profile spawns its
+    # own worker thread; the candle manager is built lazily by the first start.
+    from main import start_bot, pause_bot
+    for profile in db.list_profiles():
+        pid = profile["id"]
+        status = db.get_profile_config(pid, "bot_status") or "stopped"
+        if status not in ("running", "paused"):
+            continue
+        log.info("Auto-resuming bot for profile %s (%s): status=%s",
+                 pid, profile["name"], status)
+        try:
+            start_bot(profile_id=pid)
+            if status == "paused":
+                pause_bot(profile_id=pid)
+        except Exception:
+            log.exception("Auto-resume failed for profile %s", pid)
 
     socketio.run(app, host="0.0.0.0", port=8080, debug=False, use_reloader=False,
                  allow_unsafe_werkzeug=True)

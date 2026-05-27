@@ -659,6 +659,35 @@ def create_app():
         session["active_profile_id"] = pid
         return jsonify({"active_profile_id": pid})
 
+    @app.route("/api/profiles/<int:pid>/bot/start", methods=["POST"])
+    def api_profile_bot_start(pid):
+        if db.get_profile(pid) is None:
+            return jsonify({"error": "not found"}), 404
+        from main import start_bot
+        t = start_bot(profile_id=pid)
+        if t is None:
+            return jsonify({
+                "error": "could not start bot — check exchange credentials",
+                "status": db.get_profile_config(pid, "bot_status") or "error",
+            }), 500
+        return jsonify({"ok": True, "status": "running", "profile_id": pid})
+
+    @app.route("/api/profiles/<int:pid>/bot/pause", methods=["POST"])
+    def api_profile_bot_pause(pid):
+        if db.get_profile(pid) is None:
+            return jsonify({"error": "not found"}), 404
+        from main import pause_bot
+        pause_bot(profile_id=pid)
+        return jsonify({"ok": True, "status": "paused", "profile_id": pid})
+
+    @app.route("/api/profiles/<int:pid>/bot/stop", methods=["POST"])
+    def api_profile_bot_stop(pid):
+        if db.get_profile(pid) is None:
+            return jsonify({"error": "not found"}), 404
+        from main import stop_bot
+        stop_bot(profile_id=pid)
+        return jsonify({"ok": True, "status": "stopped", "profile_id": pid})
+
     # ── SocketIO — push updates every 5 seconds ────────────────────
 
     def background_pusher():
