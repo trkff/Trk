@@ -549,6 +549,115 @@ def set_lighter_coi_counter(n: int) -> None:
     set_config(_COI_KEY, str(int(n)))
 
 
+# ── Profile CRUD ────────────────────────────────────────────────────
+# Each profile owns its own Lighter/HL credentials and isolates strategies,
+# trades, signals, logs and bot status via config keys under `profile.<id>.*`.
+
+_PROFILE_CRED_FIELDS = (
+    "lighter_account_index", "lighter_api_key_private", "lighter_api_key_index",
+    "hyperliquid_address", "hyperliquid_secret",
+)
+_PROFILE_PUBLIC_FIELDS = (
+    "id", "name", "exchange",
+    "lighter_account_index", "lighter_api_key_private", "lighter_api_key_index",
+    "hyperliquid_address", "hyperliquid_secret",
+    "created_at", "updated_at",
+)
+
+
+def list_profiles() -> list[dict]:
+    rows = get_conn().execute(
+        "SELECT " + ", ".join(_PROFILE_PUBLIC_FIELDS) + " FROM profiles ORDER BY id"
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_profile(profile_id: int) -> dict | None:
+    row = get_conn().execute(
+        "SELECT * FROM profiles WHERE id = ?", (profile_id,)
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def _check_unique_lighter_account(account_index, exclude_id):
+    if not account_index:
+        return
+    row = get_conn().execute(
+        "SELECT id FROM profiles WHERE lighter_account_index = ? AND id != ?",
+        (str(account_index), exclude_id if exclude_id is not None else -1),
+    ).fetchone()
+    if row:
+        raise ValueError(
+            f"lighter_account_index '{account_index}' is already used by profile {row['id']}"
+        )
+
+
+def create_profile(*, name: str, exchange: str = "lighter", credentials: dict | None = None) -> int:
+    if not name or not name.strip():
+        raise ValueError("name is required")
+    if exchange not in ("lighter", "hyperliquid"):
+        raise ValueError(f"unknown exchange: {exchange}")
+    creds = {k: (credentials or {}).get(k) for k in _PROFILE_CRED_FIELDS}
+    _check_unique_lighter_account(creds.get("lighter_account_index"), exclude_id=None)
+    now = int(time.time() * 1000)
+    conn = get_conn()
+    cur = conn.execute(
+        """INSERT INTO profiles
+           (name, exchange, lighter_account_index, lighter_api_key_private,
+            lighter_api_key_index, hyperliquid_address, hyperliquid_secret,
+            created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (name.strip(), exchange,
+         creds["lighter_account_index"], creds["lighter_api_key_private"],
+         creds["lighter_api_key_index"], creds["hyperliquid_address"],
+         creds["hyperliquid_secret"], now, now),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def update_profile(profile_id: int, *, name: str | None = None,
+                   exchange: str | None = None, credentials: dict | None = None):
+    fields, values = [], []
+    if name is not None:
+        if not name.strip():
+            raise ValueError("name cannot be empty")
+        fields.append("name = ?"); values.append(name.strip())
+    if exchange is not None:
+        if exchange not in ("lighter", "hyperliquid"):
+            raise ValueError(f"unknown exchange: {exchange}")
+        fields.append("exchange = ?"); values.append(exchange)
+    if credentials:
+        if "lighter_account_index" in credentials:
+            _check_unique_lighter_account(
+                credentials["lighter_account_index"], exclude_id=profile_id
+            )
+        for k in _PROFILE_CRED_FIELDS:
+            if k in credentials:
+                fields.append(f"{k} = ?"); values.append(credentials[k])
+    if not fields:
+        return
+    fields.append("updated_at = ?")
+    values.append(int(time.time() * 1000))
+    values.append(profile_id)
+    conn = get_conn()
+    conn.execute(f"UPDATE profiles SET {', '.join(fields)} WHERE id = ?", values)
+    conn.commit()
+
+
+def delete_profile(profile_id: int):
+    conn = get_conn()
+    conn.execute("DELETE FROM profiles WHERE id = ?", (profile_id,))
+    # Cascade: drop profile-scoped trades/signals/logs and all namespaced config keys
+    conn.execute("DELETE FROM trades WHERE profile_id = ?", (profile_id,))
+    conn.execute("DELETE FROM signals WHERE profile_id = ?", (profile_id,))
+    conn.execute("DELETE FROM logs WHERE profile_id = ?", (profile_id,))
+    conn.execute(
+        "DELETE FROM config WHERE key LIKE ?", (f"profile.{profile_id}.%",)
+    )
+    conn.commit()
+
+
 def is_configured() -> bool:
     exchange = get_config("selected_exchange") or "hyperliquid"
     if exchange == "lighter":

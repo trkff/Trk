@@ -109,6 +109,57 @@ def test_m8_is_idempotent(tmp_path, monkeypatch):
     assert rows["n"] >= 1
 
 
+def test_list_create_update_delete_profile(tmp_path, monkeypatch):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "test.db")
+    _reset_conn()
+    db.init_db()
+    # Default exists
+    profiles = db.list_profiles()
+    assert any(p["id"] == 1 and p["name"] == "Default" for p in profiles)
+    # Create
+    pid = db.create_profile(
+        name="Conta 2", exchange="lighter",
+        credentials={"lighter_account_index": "999"},
+    )
+    assert pid > 1
+    assert db.get_profile(pid)["name"] == "Conta 2"
+    assert db.get_profile(pid)["lighter_account_index"] == "999"
+    # Update (rename + new creds)
+    db.update_profile(pid, name="Hedge", credentials={"lighter_account_index": "1000"})
+    assert db.get_profile(pid)["name"] == "Hedge"
+    assert db.get_profile(pid)["lighter_account_index"] == "1000"
+    # Delete
+    db.delete_profile(pid)
+    assert db.get_profile(pid) is None
+
+
+def test_create_profile_rejects_duplicate_lighter_account(tmp_path, monkeypatch):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "test.db")
+    _reset_conn()
+    db.init_db()
+    db.create_profile(name="A", exchange="lighter", credentials={"lighter_account_index": "111"})
+    with pytest.raises(ValueError, match="lighter_account_index"):
+        db.create_profile(name="B", exchange="lighter", credentials={"lighter_account_index": "111"})
+
+
+def test_delete_profile_cascades_namespaced_keys(tmp_path, monkeypatch):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "test.db")
+    _reset_conn()
+    db.init_db()
+    pid = db.create_profile(name="Tmp", exchange="lighter", credentials={})
+    conn = db.get_conn()
+    conn.execute(
+        "INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)",
+        (f"profile.{pid}.bot_status", "running"),
+    )
+    conn.commit()
+    db.delete_profile(pid)
+    rows = conn.execute(
+        "SELECT key FROM config WHERE key LIKE ?", (f"profile.{pid}.%",)
+    ).fetchall()
+    assert rows == []
+
+
 def test_legacy_strategy_params_reachable_via_profile_1(tmp_path, monkeypatch):
     """Legacy `strategy.<name>.params` value survives M8 reachable under the new namespace."""
     monkeypatch.setattr(db, "DB_PATH", tmp_path / "test.db")
