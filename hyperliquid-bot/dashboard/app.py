@@ -5,6 +5,7 @@ Auto-refreshes data every 5 seconds via SocketIO.
 """
 
 import json
+import queue
 import threading
 import time
 
@@ -138,17 +139,18 @@ def create_app():
         strategy = request.args.get("strategy")
         limit = int(request.args.get("limit", 100))
         offset = int(request.args.get("offset", 0))
-        trades = db.get_trades(limit, offset, asset, side, date_from, date_to, strategy=strategy)
+        trades = db.get_trades(limit, offset, asset, side, date_from, date_to,
+                               strategy=strategy, profile_id=g.profile_id)
         return jsonify(trades)
 
     @app.route("/api/trades/cumulative-pnl")
     def api_cumulative_pnl():
-        data = db.get_cumulative_pnl()
+        data = db.get_cumulative_pnl(profile_id=g.profile_id)
         return jsonify(data)
 
     @app.route("/api/trades/pnl-distribution")
     def api_pnl_distribution():
-        data = db.get_pnl_distribution()
+        data = db.get_pnl_distribution(profile_id=g.profile_id)
         return jsonify(data)
 
     @app.route("/api/strategy-stats")
@@ -161,7 +163,8 @@ def create_app():
         limit = int(request.args.get("limit", 100))
         offset = int(request.args.get("offset", 0))
         strategy = request.args.get("strategy")
-        signals = db.get_signals(limit, offset, strategy_name=strategy)
+        signals = db.get_signals(limit, offset, strategy_name=strategy,
+                                 profile_id=g.profile_id)
         return jsonify(signals)
 
     @app.route("/api/strategies", methods=["GET"])
@@ -328,9 +331,93 @@ def create_app():
 
     # ── Ativos API (download de candles novos) ─────────────────────
 
-    # In-memory job registry for downloads: {job_id: {asset, status, message, result, started_at}}
+    # In-memory job registry for downloads: {job_id: {asset, interval, status, message, result, started_at, key}}
+    # status ∈ {"queued", "running", "done", "error"}
     _ativos_jobs: dict = {}
     _ativos_jobs_lock = threading.Lock()
+
+    # Fila FIFO + worker único — garante 1 download por vez, evita rate-limit da Lighter
+    _ativos_queue: "queue.Queue[str]" = queue.Queue()
+    _ativos_worker_started = {"v": False}
+    _ativos_worker_lock = threading.Lock()
+
+    def _ativos_queue_position(job_id: str) -> int:
+        """0 = rodando agora; 1 = próximo da fila; etc."""
+        with _ativos_jobs_lock:
+            queued_ids = [
+                jid for jid, j in _ativos_jobs.items()
+                if j.get("status") == "queued"
+            ]
+            # ordem de inserção é a ordem dos jobs queued (Python preserva ordem do dict)
+            try:
+                idx = queued_ids.index(job_id)
+            except ValueError:
+                return 0
+            # +1 se já há um job running (ele ocupa a posição 0)
+            has_running = any(j.get("status") == "running" for j in _ativos_jobs.values())
+            return idx + (1 if has_running else 0) + (0 if has_running else 1)
+
+    def _ativos_worker_loop():
+        from bot.backtest.csv_loader import download_full_history
+        while True:
+            job_id = _ativos_queue.get()
+            try:
+                with _ativos_jobs_lock:
+                    job = _ativos_jobs.get(job_id)
+                    if not job:
+                        continue
+                    job["status"] = "running"
+                    job["message"] = "iniciando..."
+                    job["started_at"] = time.time()
+                    asset = job["asset"]
+                    interval = job["interval"]
+
+                def _progress(msg: str):
+                    with _ativos_jobs_lock:
+                        if job_id in _ativos_jobs:
+                            _ativos_jobs[job_id]["message"] = msg
+
+                try:
+                    result = download_full_history(asset, interval=interval, progress_cb=_progress)
+                    with _ativos_jobs_lock:
+                        _ativos_jobs[job_id]["status"] = "done" if result.get("ok") else "error"
+                        _ativos_jobs[job_id]["message"] = (
+                            f"{result.get('rows', 0)} candles salvos (+{result.get('added', 0)} novos)"
+                            if result.get("ok") else result.get("error", "erro")
+                        )
+                        _ativos_jobs[job_id]["result"] = result
+                except Exception as e:
+                    log.warning(f"[ativos] worker {asset} {interval} falhou: {e}")
+                    with _ativos_jobs_lock:
+                        _ativos_jobs[job_id]["status"] = "error"
+                        _ativos_jobs[job_id]["message"] = str(e)
+            finally:
+                _ativos_queue.task_done()
+
+    def _ensure_ativos_worker():
+        with _ativos_worker_lock:
+            if not _ativos_worker_started["v"]:
+                threading.Thread(target=_ativos_worker_loop, daemon=True, name="ativos-worker").start()
+                _ativos_worker_started["v"] = True
+
+    def _enqueue_download(asset: str, interval: str) -> tuple[str, bool]:
+        """Enfileira (asset, interval). Se já tem job queued OU running para esse par, devolve o existente.
+        Retorna (job_id, was_existing)."""
+        import uuid
+        job_key = f"{asset}|{interval}"
+        with _ativos_jobs_lock:
+            for jid, j in _ativos_jobs.items():
+                if j.get("key") == job_key and j.get("status") in ("queued", "running"):
+                    return jid, True
+            job_id = uuid.uuid4().hex
+            _ativos_jobs[job_id] = {
+                "asset": asset, "interval": interval, "key": job_key,
+                "status": "queued", "message": "na fila...", "result": None,
+                "started_at": None, "enqueued_at": time.time(),
+            }
+        _ativos_queue.put(job_id)
+        _ensure_ativos_worker()
+        return job_id, False
 
     @app.route("/api/ativos")
     def api_ativos_list():
@@ -359,8 +446,7 @@ def create_app():
 
     @app.route("/api/ativos/download", methods=["POST"])
     def api_ativos_download():
-        from bot.backtest.csv_loader import download_full_history, SUPPORTED_DOWNLOAD_INTERVALS
-        import uuid
+        from bot.backtest.csv_loader import SUPPORTED_DOWNLOAD_INTERVALS
         data = request.get_json() or {}
         asset = (data.get("asset") or "").upper().strip()
         interval = (data.get("interval") or "5m").strip()
@@ -369,42 +455,12 @@ def create_app():
         if interval not in SUPPORTED_DOWNLOAD_INTERVALS:
             return jsonify({"error": f"intervalo inválido: {interval}"}), 400
 
-        job_key = f"{asset}|{interval}"
-        with _ativos_jobs_lock:
-            for jid, j in _ativos_jobs.items():
-                if j.get("key") == job_key and j["status"] == "running":
-                    return jsonify({"job_id": jid, "existing": True})
-
-        job_id = uuid.uuid4().hex
-        _ativos_jobs[job_id] = {
-            "asset": asset, "interval": interval, "key": job_key,
-            "status": "running", "message": "iniciando...", "result": None,
-            "started_at": time.time(),
-        }
-
-        def _progress(msg: str):
-            with _ativos_jobs_lock:
-                if job_id in _ativos_jobs:
-                    _ativos_jobs[job_id]["message"] = msg
-
-        def _runner():
-            try:
-                result = download_full_history(asset, interval=interval, progress_cb=_progress)
-                with _ativos_jobs_lock:
-                    _ativos_jobs[job_id]["status"] = "done" if result.get("ok") else "error"
-                    _ativos_jobs[job_id]["message"] = (
-                        f"{result.get('rows', 0)} candles salvos (+{result.get('added', 0)} novos)"
-                        if result.get("ok") else result.get("error", "erro")
-                    )
-                    _ativos_jobs[job_id]["result"] = result
-            except Exception as e:
-                log.warning(f"[ativos] download {asset} {interval} falhou: {e}")
-                with _ativos_jobs_lock:
-                    _ativos_jobs[job_id]["status"] = "error"
-                    _ativos_jobs[job_id]["message"] = str(e)
-
-        threading.Thread(target=_runner, daemon=True).start()
-        return jsonify({"job_id": job_id})
+        job_id, existing = _enqueue_download(asset, interval)
+        return jsonify({
+            "job_id": job_id,
+            "existing": existing,
+            "queue_position": _ativos_queue_position(job_id),
+        })
 
     @app.route("/api/ativos/download/<job_id>")
     def api_ativos_download_status(job_id):
@@ -412,7 +468,97 @@ def create_app():
             job = _ativos_jobs.get(job_id)
             if not job:
                 return jsonify({"error": "Job not found"}), 404
-            return jsonify(job)
+            # cópia rasa para anexar queue_position sem mexer no original
+            resp = dict(job)
+        resp["queue_position"] = _ativos_queue_position(job_id) if resp.get("status") == "queued" else 0
+        return jsonify(resp)
+
+    # Update-all: agrega N job_ids individuais (todos passam pela mesma fila)
+    _ativos_updateall: dict = {"batch_id": None}
+    _ativos_updateall_batches: dict = {}  # batch_id -> {job_ids: [...], started_at}
+
+    @app.route("/api/ativos/update-all", methods=["POST"])
+    def api_ativos_update_all():
+        """Enfileira download_full_history para todos os CSVs em candles/.
+        Cada um vira um job individual na fila — o worker processa sequencialmente.
+        Devolve um batch_id que agrupa os job_ids."""
+        from bot.backtest.csv_loader import SUPPORTED_DOWNLOAD_INTERVALS, _CANDLES_DIR
+        import re, uuid
+
+        # batch ativo? devolve o existente
+        cur_batch = _ativos_updateall.get("batch_id")
+        if cur_batch and cur_batch in _ativos_updateall_batches:
+            batch = _ativos_updateall_batches[cur_batch]
+            with _ativos_jobs_lock:
+                any_active = any(
+                    _ativos_jobs.get(jid, {}).get("status") in ("queued", "running")
+                    for jid in batch["job_ids"]
+                )
+            if any_active:
+                return jsonify({"batch_id": cur_batch, "existing": True, "total": len(batch["job_ids"])})
+
+        # descobre CSVs presentes
+        targets: list[tuple[str, str]] = []
+        if _CANDLES_DIR.exists():
+            pattern = re.compile(r"^([a-z0-9]+)_(\d+[mh])\.csv$", re.IGNORECASE)
+            for f in _CANDLES_DIR.iterdir():
+                if not f.is_file():
+                    continue
+                m = pattern.match(f.name)
+                if not m:
+                    continue
+                asset = m.group(1).upper()
+                interval = m.group(2)
+                if interval in SUPPORTED_DOWNLOAD_INTERVALS:
+                    targets.append((asset, interval))
+        targets.sort()
+
+        job_ids: list[str] = []
+        for asset, interval in targets:
+            jid, _ = _enqueue_download(asset, interval)
+            job_ids.append(jid)
+
+        batch_id = uuid.uuid4().hex
+        _ativos_updateall_batches[batch_id] = {
+            "job_ids": job_ids, "started_at": time.time(),
+        }
+        _ativos_updateall["batch_id"] = batch_id
+        return jsonify({"batch_id": batch_id, "total": len(job_ids)})
+
+    @app.route("/api/ativos/update-all/<batch_id>")
+    def api_ativos_update_all_status(batch_id):
+        batch = _ativos_updateall_batches.get(batch_id)
+        if not batch:
+            return jsonify({"error": "Batch not found"}), 404
+        job_ids = batch["job_ids"]
+        total = len(job_ids)
+        with _ativos_jobs_lock:
+            states = [_ativos_jobs.get(jid, {}) for jid in job_ids]
+        done = sum(1 for s in states if s.get("status") == "done")
+        errors = [
+            f"{s.get('asset')} {s.get('interval')}: {s.get('message', 'erro')}"
+            for s in states if s.get("status") == "error"
+        ]
+        running = next((s for s in states if s.get("status") == "running"), None)
+        queued_n = sum(1 for s in states if s.get("status") == "queued")
+        finished_n = done + len(errors)
+        all_done = finished_n >= total
+        if running:
+            msg = f"{finished_n}/{total} — {running.get('asset')} {running.get('interval')}: {running.get('message', '...')}"
+        elif all_done:
+            msg = f"{total}/{total} concluído" + (f" ({len(errors)} erros)" if errors else "")
+        else:
+            msg = f"{finished_n}/{total} concluído — {queued_n} na fila"
+        return jsonify({
+            "kind": "update-all",
+            "status": "done" if all_done else "running",
+            "total": total,
+            "current": finished_n,
+            "queued": queued_n,
+            "errors": errors,
+            "message": msg,
+            "started_at": batch["started_at"],
+        })
 
     # ── Scanner API ──────────────────────────────────────────────────
 

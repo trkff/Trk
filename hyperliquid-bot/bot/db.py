@@ -882,9 +882,12 @@ def get_open_trades(profile_id: int | None = None) -> list[dict]:
 
 def get_trades(limit: int = 100, offset: int = 0, asset: str = None,
                side: str = None, date_from: str = None, date_to: str = None,
-               strategy: str = None) -> list[dict]:
+               strategy: str = None, profile_id: int | None = None) -> list[dict]:
     query = "SELECT * FROM trades WHERE 1=1"
     params = []
+    if profile_id is not None:
+        query += " AND profile_id = ?"
+        params.append(profile_id)
     if asset:
         query += " AND asset = ?"
         params.append(asset)
@@ -906,12 +909,19 @@ def get_trades(limit: int = 100, offset: int = 0, asset: str = None,
     return [dict(r) for r in rows]
 
 
-def get_today_trades() -> list[dict]:
+def get_today_trades(profile_id: int | None = None) -> list[dict]:
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    rows = get_conn().execute(
-        "SELECT * FROM trades WHERE entry_time >= ? ORDER BY entry_time DESC",
-        (today,),
-    ).fetchall()
+    if profile_id is None:
+        rows = get_conn().execute(
+            "SELECT * FROM trades WHERE entry_time >= ? ORDER BY entry_time DESC",
+            (today,),
+        ).fetchall()
+    else:
+        rows = get_conn().execute(
+            "SELECT * FROM trades WHERE profile_id = ? AND entry_time >= ? "
+            "ORDER BY entry_time DESC",
+            (profile_id, today),
+        ).fetchall()
     return [dict(r) for r in rows]
 
 
@@ -1044,9 +1054,13 @@ def insert_signal(signal: dict) -> int:
     return cur.lastrowid
 
 
-def get_signals(limit: int = 100, offset: int = 0, strategy_name: str = None) -> list[dict]:
+def get_signals(limit: int = 100, offset: int = 0, strategy_name: str = None,
+                profile_id: int | None = None) -> list[dict]:
     query = "SELECT * FROM signals WHERE 1=1"
     params = []
+    if profile_id is not None:
+        query += " AND profile_id = ?"
+        params.append(profile_id)
     if strategy_name:
         query += " AND strategy_name = ?"
         params.append(strategy_name)
@@ -1119,19 +1133,35 @@ def get_logs(limit: int = 200, level: str = None,
 
 # ── Cumulative PnL for charts ──────────────────────────────────────
 
-def get_cumulative_pnl() -> list[dict]:
-    rows = get_conn().execute("""
-        SELECT exit_time, pnl,
-               SUM(pnl) OVER (ORDER BY exit_time) as cumulative_pnl
-        FROM trades
-        WHERE status = 'closed' AND exit_time IS NOT NULL
-        ORDER BY exit_time
-    """).fetchall()
+def get_cumulative_pnl(profile_id: int | None = None) -> list[dict]:
+    if profile_id is None:
+        rows = get_conn().execute("""
+            SELECT exit_time, pnl,
+                   SUM(pnl) OVER (ORDER BY exit_time) as cumulative_pnl
+            FROM trades
+            WHERE status = 'closed' AND exit_time IS NOT NULL
+            ORDER BY exit_time
+        """).fetchall()
+    else:
+        rows = get_conn().execute("""
+            SELECT exit_time, pnl,
+                   SUM(pnl) OVER (ORDER BY exit_time) as cumulative_pnl
+            FROM trades
+            WHERE profile_id = ? AND status = 'closed' AND exit_time IS NOT NULL
+            ORDER BY exit_time
+        """, (profile_id,)).fetchall()
     return [dict(r) for r in rows]
 
 
-def get_pnl_distribution() -> list[float]:
-    rows = get_conn().execute(
-        "SELECT pnl FROM trades WHERE status = 'closed' AND pnl IS NOT NULL"
-    ).fetchall()
+def get_pnl_distribution(profile_id: int | None = None) -> list[float]:
+    if profile_id is None:
+        rows = get_conn().execute(
+            "SELECT pnl FROM trades WHERE status = 'closed' AND pnl IS NOT NULL"
+        ).fetchall()
+    else:
+        rows = get_conn().execute(
+            "SELECT pnl FROM trades "
+            "WHERE profile_id = ? AND status = 'closed' AND pnl IS NOT NULL",
+            (profile_id,),
+        ).fetchall()
     return [r["pnl"] for r in rows]
