@@ -82,6 +82,19 @@ def init_db():
         strategy_name TEXT DEFAULT 'mean_reversion'
     );
 
+    CREATE TABLE IF NOT EXISTS profiles (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT UNIQUE NOT NULL,
+        exchange TEXT NOT NULL DEFAULT 'lighter',
+        lighter_account_index TEXT,
+        lighter_api_key_private TEXT,
+        lighter_api_key_index TEXT,
+        hyperliquid_address TEXT,
+        hyperliquid_secret TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_trades_status ON trades(status);
     CREATE INDEX IF NOT EXISTS idx_trades_asset ON trades(asset);
     CREATE INDEX IF NOT EXISTS idx_trades_entry_time ON trades(entry_time);
@@ -393,6 +406,25 @@ def get_last_candle_ts(tf: str) -> dict[str, int]:
 def set_last_candle_ts(tf: str, asset: str, ts: int) -> None:
     """Persiste o último ts conhecido para (tf, asset)."""
     set_config(f"last_ts.{tf}.{asset}", str(int(ts)))
+
+
+# ── lighter client_order_index counter (persistido) ───────────────────────
+# O counter é usado pelo bot para gerar `client_order_index` único em cada
+# `signer.create_order(...)`. Precisa ser monotônico ACROSS restarts — senão
+# o lookup em /accountInactiveOrders fica ambíguo (várias txs com mesmo coi).
+_COI_KEY = "lighter.client_order_counter"
+
+
+def get_lighter_coi_counter() -> int:
+    raw = get_config(_COI_KEY)
+    try:
+        return int(raw) if raw is not None else 0
+    except (TypeError, ValueError):
+        return 0
+
+
+def set_lighter_coi_counter(n: int) -> None:
+    set_config(_COI_KEY, str(int(n)))
 
 
 def is_configured() -> bool:
