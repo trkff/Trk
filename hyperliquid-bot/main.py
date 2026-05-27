@@ -57,6 +57,20 @@ _candle_mgr_lock = threading.Lock()
 # avoid hammering the Lighter REST with simultaneous get_candles bursts.
 _dispatch_pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="dispatch")
 
+# Higher-TF boundaries that closed more than this many seconds ago do NOT
+# trigger a strategy evaluation — only the store is updated so the bot
+# doesn't keep re-detecting them. Prevents a restart-induced "catch-up"
+# where the bot fires signals from candles that closed minutes ago, with
+# a stale price baseline that the strategy backtest never saw.
+_TF_STALENESS_SEC = 120
+_TF_INTERVAL_MS: dict[str, int] = {
+    "15m": 15 * 60 * 1000,
+    "30m": 30 * 60 * 1000,
+    "1h":  60 * 60 * 1000,
+    "4h":  4 * 60 * 60 * 1000,
+    "1d":  24 * 60 * 60 * 1000,
+}
+
 _asset_live_status: dict[str, dict] = {}
 _status_lock = threading.Lock()
 
@@ -579,16 +593,31 @@ def process_asset(asset: str, cfg: dict,
 
     # Detect boundary close de 15m/30m/1h/4h/1d via timestamp do último candle.
     # `tf_key` é o nome usado no DB (15m/30m/1h/4h/1d) — `tf_label` é só pro log.
+    # Staleness guard: if the candle closed more than _TF_STALENESS_SEC ago we
+    # update the store (so we don't keep re-detecting it on every subsequent
+    # 5m close) but return False — no strategy evaluation. This blocks
+    # restart-induced "catch-up" signals where a 1h candle closed during the
+    # downtime and the first 5m close post-restart would otherwise fire it
+    # against a price that's already minutes stale.
     def _detect_new(tf_label: str, tf_key: str, df, store: dict) -> bool:
         if df is None or df.empty:
             return False
         latest_ts = int(df["timestamp"].iloc[-1])
-        if latest_ts > store.get(asset, 0):
-            store[asset] = latest_ts
-            db.set_last_candle_ts(tf_key, asset, latest_ts)
-            log.info(f"[{asset}] New {tf_label} candle closed")
-            return True
-        return False
+        if latest_ts <= store.get(asset, 0):
+            return False
+        store[asset] = latest_ts
+        db.set_last_candle_ts(tf_key, asset, latest_ts)
+        interval_ms = _TF_INTERVAL_MS.get(tf_key, 0)
+        close_ts = latest_ts + interval_ms
+        age_sec = (now_ms - close_ts) / 1000.0
+        if age_sec > _TF_STALENESS_SEC:
+            log.warning(
+                f"[{asset}] {tf_label} candle close was {age_sec:.0f}s ago "
+                f"(> {_TF_STALENESS_SEC}s threshold) — skipping evaluation to avoid stale signal"
+            )
+            return False
+        log.info(f"[{asset}] New {tf_label} candle closed")
+        return True
 
     new_15m = "15m" in active and _detect_new("15m", "15m", df_15m, last_15m_ts)
     new_30m = "30m" in active and _detect_new("30m", "30m", df_30m, last_30m_ts)
