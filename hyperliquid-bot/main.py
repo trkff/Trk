@@ -277,6 +277,11 @@ def _on_candle_close_dispatch(asset: str, interval: str):
     if interval != "5m":
         return
     # Snapshot ts caches OUTSIDE the lock to avoid blocking the candle thread.
+    # Each profile receives an INDEPENDENT COPY of every dict — otherwise the
+    # first profile to process a shared asset (e.g. CRCL watched by both Default
+    # and "15 min") would mutate the shared store and the second profile would
+    # see latest_ts <= store, so its `new_15m`/`new_30m`/`new_1h` would be False
+    # and its 15m+ strategies would never fire on that candle.
     last_15m_ts = db.get_last_candle_ts("15m")
     last_30m_ts = db.get_last_candle_ts("30m")
     last_1h_ts  = db.get_last_candle_ts("1h")
@@ -302,9 +307,13 @@ def _on_candle_close_dispatch(asset: str, interval: str):
         if asset not in active_assets:
             return
         try:
+            # Pass shallow copies — each profile mutates its own dict.
+            # Mutations are still persisted to the shared DB (idempotent: both
+            # profiles write the same ts for the same boundary).
             process_asset(
                 asset, cfg,
-                last_15m_ts, last_30m_ts, last_1h_ts, last_4h_ts, last_1d_ts,
+                dict(last_15m_ts), dict(last_30m_ts), dict(last_1h_ts),
+                dict(last_4h_ts), dict(last_1d_ts),
                 profile_id=pid,
             )
         except Exception:
