@@ -17,7 +17,7 @@ def test_profiles_table_exists(tmp_path, monkeypatch):
     cols = [r["name"] for r in db.get_conn().execute("PRAGMA table_info(profiles)").fetchall()]
     assert set(cols) >= {
         "id", "name", "exchange",
-        "lighter_account_index", "lighter_api_key_private", "lighter_api_key_index",
+        "lighter_wallet_address", "lighter_public_key", "lighter_private_key",
         "hyperliquid_address", "hyperliquid_secret",
         "created_at", "updated_at",
     }
@@ -87,11 +87,13 @@ def test_m8_creates_default_profile_and_namespaces_keys(tmp_path, monkeypatch):
         "lighter.client_order_counter",
         "risk.max_positions",
         "sizing.mode",
-        # Legacy credential keys consumed into the Default profile row
-        "account_address",
-        "secret_key",
     ):
         assert not _row_exists(old), f"legacy key {old!r} should be deleted from config table"
+
+    # Legacy credential keys stay in `config` for now — Lighter exchange client
+    # and is_configured() still read them as globals. Phase 4 deletes them.
+    assert _row_exists("account_address"), "legacy HL creds should stay until Phase 4"
+    assert _row_exists("secret_key"), "legacy HL creds should stay until Phase 4"
 
     # Truly global keys are preserved
     assert db.get_config("selected_exchange") == "lighter"
@@ -119,15 +121,15 @@ def test_list_create_update_delete_profile(tmp_path, monkeypatch):
     # Create
     pid = db.create_profile(
         name="Conta 2", exchange="lighter",
-        credentials={"lighter_account_index": "999"},
+        credentials={"lighter_wallet_address": "999"},
     )
     assert pid > 1
     assert db.get_profile(pid)["name"] == "Conta 2"
-    assert db.get_profile(pid)["lighter_account_index"] == "999"
+    assert db.get_profile(pid)["lighter_wallet_address"] == "999"
     # Update (rename + new creds)
-    db.update_profile(pid, name="Hedge", credentials={"lighter_account_index": "1000"})
+    db.update_profile(pid, name="Hedge", credentials={"lighter_wallet_address": "1000"})
     assert db.get_profile(pid)["name"] == "Hedge"
-    assert db.get_profile(pid)["lighter_account_index"] == "1000"
+    assert db.get_profile(pid)["lighter_wallet_address"] == "1000"
     # Delete
     db.delete_profile(pid)
     assert db.get_profile(pid) is None
@@ -137,9 +139,9 @@ def test_create_profile_rejects_duplicate_lighter_account(tmp_path, monkeypatch)
     monkeypatch.setattr(db, "DB_PATH", tmp_path / "test.db")
     _reset_conn()
     db.init_db()
-    db.create_profile(name="A", exchange="lighter", credentials={"lighter_account_index": "111"})
-    with pytest.raises(ValueError, match="lighter_account_index"):
-        db.create_profile(name="B", exchange="lighter", credentials={"lighter_account_index": "111"})
+    db.create_profile(name="A", exchange="lighter", credentials={"lighter_wallet_address": "111"})
+    with pytest.raises(ValueError, match="lighter_wallet_address"):
+        db.create_profile(name="B", exchange="lighter", credentials={"lighter_wallet_address": "111"})
 
 
 def _trade_dict(**overrides):

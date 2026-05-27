@@ -86,9 +86,9 @@ def init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT UNIQUE NOT NULL,
         exchange TEXT NOT NULL DEFAULT 'lighter',
-        lighter_account_index TEXT,
-        lighter_api_key_private TEXT,
-        lighter_api_key_index TEXT,
+        lighter_wallet_address TEXT,
+        lighter_public_key TEXT,
+        lighter_private_key TEXT,
         hyperliquid_address TEXT,
         hyperliquid_secret TEXT,
         created_at INTEGER NOT NULL,
@@ -220,6 +220,11 @@ def migrate_db():
 
     # M8b — multi-profile support: seed Default profile + namespace per-profile keys
     _migrate_to_multi_profile(conn)
+
+    # M8c — fix profiles credential column names (renamed from the
+    # SDK-style placeholders shipped in M8b to the actual user-input field
+    # names this codebase uses: lighter_wallet_address/public_key/private_key).
+    _fix_profile_credential_columns(conn)
 
 
 _LEGACY_STRATEGY_NAMES_TO_5M = [
@@ -378,12 +383,14 @@ def _migrate_to_multi_profile(conn):
 
     now = int(time.time() * 1000)
 
-    # 1. Create Default profile from legacy global credentials, if not present
+    # 1. Create Default profile from legacy global credentials, if not present.
+    # The legacy keys in `config` use the names: lighter_wallet_address,
+    # lighter_public_key, lighter_private_key, account_address, secret_key.
     existing = conn.execute("SELECT id FROM profiles WHERE id = 1").fetchone()
     if existing is None:
         cred_keys = (
             "account_address", "secret_key",
-            "lighter_account_index", "lighter_api_key_private", "lighter_api_key_index",
+            "lighter_wallet_address", "lighter_public_key", "lighter_private_key",
         )
         creds = {}
         for k in cred_keys:
@@ -395,15 +402,15 @@ def _migrate_to_multi_profile(conn):
         exchange = exch_row["value"] if exch_row else "lighter"
         conn.execute(
             """INSERT INTO profiles
-               (id, name, exchange, lighter_account_index, lighter_api_key_private,
-                lighter_api_key_index, hyperliquid_address, hyperliquid_secret,
+               (id, name, exchange, lighter_wallet_address, lighter_public_key,
+                lighter_private_key, hyperliquid_address, hyperliquid_secret,
                 created_at, updated_at)
                VALUES (1, 'Default', ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 exchange,
-                creds.get("lighter_account_index"),
-                creds.get("lighter_api_key_private"),
-                creds.get("lighter_api_key_index"),
+                creds.get("lighter_wallet_address"),
+                creds.get("lighter_public_key"),
+                creds.get("lighter_private_key"),
                 creds.get("account_address"),
                 creds.get("secret_key"),
                 now, now,
@@ -427,14 +434,90 @@ def _migrate_to_multi_profile(conn):
         )
         conn.execute("DELETE FROM config WHERE key = ?", (k,))
 
-    # 4. Drop legacy credential keys now that they live on the Default profile row
-    for k in ("account_address", "secret_key",
-              "lighter_account_index", "lighter_api_key_private", "lighter_api_key_index"):
-        conn.execute("DELETE FROM config WHERE key = ?", (k,))
+    # 4. Legacy credential keys stay in `config` for now — `is_configured()` and
+    # the current Lighter exchange client still read them as globals. Phase 4
+    # will switch those reads to the Default profile row, after which a
+    # follow-up migration can drop the keys safely.
 
     # 5. Set marker
     conn.execute(
         "INSERT INTO config (key, value) VALUES ('_migration_multi_profile', 'done') "
+        "ON CONFLICT(key) DO UPDATE SET value = 'done'"
+    )
+    conn.commit()
+
+
+_M8C_COLUMN_RENAMES = (
+    ("lighter_account_index",  "lighter_wallet_address"),
+    ("lighter_api_key_index",  "lighter_public_key"),
+    ("lighter_api_key_private","lighter_private_key"),
+)
+
+
+def _fix_profile_credential_columns(conn):
+    """M8c — rename the wrong column names shipped in M8b and backfill the
+    Default profile credentials from the legacy global config keys.
+
+    Idempotent via `_migration_fix_profile_cred_cols=done`.
+    """
+    marker = conn.execute(
+        "SELECT value FROM config WHERE key = '_migration_fix_profile_cred_cols'"
+    ).fetchone()
+    if marker and marker["value"] == "done":
+        return
+
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(profiles)").fetchall()}
+    # 1. Rename old columns to new names if necessary (SQLite >= 3.25)
+    for old, new in _M8C_COLUMN_RENAMES:
+        if old in cols and new not in cols:
+            try:
+                conn.execute(f"ALTER TABLE profiles RENAME COLUMN {old} TO {new}")
+            except sqlite3.OperationalError:
+                # SQLite too old for RENAME COLUMN — fall back to ADD + UPDATE + leave old col.
+                conn.execute(f"ALTER TABLE profiles ADD COLUMN {new} TEXT")
+                conn.execute(f"UPDATE profiles SET {new} = {old}")
+            cols.add(new)
+            cols.discard(old)
+        elif old in cols and new in cols:
+            # Both exist (someone re-added one). Move data into new and stop.
+            conn.execute(f"UPDATE profiles SET {new} = COALESCE({new}, {old})")
+            # Old column is left in place; harmless.
+            cols.discard(old)
+
+    # 2. Ensure all three target columns exist on existing DBs that never had M8b
+    for _, new in _M8C_COLUMN_RENAMES:
+        if new not in cols:
+            conn.execute(f"ALTER TABLE profiles ADD COLUMN {new} TEXT")
+            cols.add(new)
+
+    # 3. Backfill Default profile from legacy global keys if its row is empty.
+    row = conn.execute(
+        "SELECT lighter_wallet_address, lighter_public_key, lighter_private_key, "
+        "hyperliquid_address, hyperliquid_secret FROM profiles WHERE id = 1"
+    ).fetchone()
+    if row is not None:
+        # Pull whatever still lives in the config table
+        def _cfg(k):
+            r = conn.execute("SELECT value FROM config WHERE key = ?", (k,)).fetchone()
+            return r["value"] if r else None
+        updates = {}
+        for col, legacy_key in (
+            ("lighter_wallet_address", "lighter_wallet_address"),
+            ("lighter_public_key",     "lighter_public_key"),
+            ("lighter_private_key",    "lighter_private_key"),
+            ("hyperliquid_address",    "account_address"),
+            ("hyperliquid_secret",     "secret_key"),
+        ):
+            if not row[col]:
+                v = _cfg(legacy_key)
+                if v:
+                    updates[col] = v
+        if updates:
+            sets = ", ".join(f"{k} = ?" for k in updates)
+            conn.execute(f"UPDATE profiles SET {sets} WHERE id = 1", list(updates.values()))
+
+    conn.execute(
+        "INSERT INTO config (key, value) VALUES ('_migration_fix_profile_cred_cols', 'done') "
         "ON CONFLICT(key) DO UPDATE SET value = 'done'"
     )
     conn.commit()
@@ -581,13 +664,15 @@ def set_lighter_coi_counter(n: int, profile_id: int = 1) -> None:
 # trades, signals, logs and bot status via config keys under `profile.<id>.*`.
 
 _PROFILE_CRED_FIELDS = (
-    "lighter_account_index", "lighter_api_key_private", "lighter_api_key_index",
+    "lighter_wallet_address", "lighter_public_key", "lighter_private_key",
     "hyperliquid_address", "hyperliquid_secret",
 )
+# Public listing — strips out private keys and HL secret. Use get_profile(id)
+# when you need the full row (e.g. to build an exchange client).
 _PROFILE_PUBLIC_FIELDS = (
     "id", "name", "exchange",
-    "lighter_account_index", "lighter_api_key_private", "lighter_api_key_index",
-    "hyperliquid_address", "hyperliquid_secret",
+    "lighter_wallet_address",
+    "hyperliquid_address",
     "created_at", "updated_at",
 )
 
@@ -606,16 +691,22 @@ def get_profile(profile_id: int) -> dict | None:
     return dict(row) if row else None
 
 
-def _check_unique_lighter_account(account_index, exclude_id):
-    if not account_index:
+def _check_unique_lighter_wallet(wallet_address, exclude_id):
+    """Reject two profiles pointing at the same Lighter wallet.
+
+    The Lighter COI counter is per account_index, which is derived from the
+    wallet address. Two profiles sharing a wallet would fight over the same
+    counter and corrupt the /accountInactiveOrders lookup.
+    """
+    if not wallet_address:
         return
     row = get_conn().execute(
-        "SELECT id FROM profiles WHERE lighter_account_index = ? AND id != ?",
-        (str(account_index), exclude_id if exclude_id is not None else -1),
+        "SELECT id FROM profiles WHERE lighter_wallet_address = ? AND id != ?",
+        (str(wallet_address), exclude_id if exclude_id is not None else -1),
     ).fetchone()
     if row:
         raise ValueError(
-            f"lighter_account_index '{account_index}' is already used by profile {row['id']}"
+            f"lighter_wallet_address '{wallet_address}' is already used by profile {row['id']}"
         )
 
 
@@ -625,18 +716,18 @@ def create_profile(*, name: str, exchange: str = "lighter", credentials: dict | 
     if exchange not in ("lighter", "hyperliquid"):
         raise ValueError(f"unknown exchange: {exchange}")
     creds = {k: (credentials or {}).get(k) for k in _PROFILE_CRED_FIELDS}
-    _check_unique_lighter_account(creds.get("lighter_account_index"), exclude_id=None)
+    _check_unique_lighter_wallet(creds.get("lighter_wallet_address"), exclude_id=None)
     now = int(time.time() * 1000)
     conn = get_conn()
     cur = conn.execute(
         """INSERT INTO profiles
-           (name, exchange, lighter_account_index, lighter_api_key_private,
-            lighter_api_key_index, hyperliquid_address, hyperliquid_secret,
+           (name, exchange, lighter_wallet_address, lighter_public_key,
+            lighter_private_key, hyperliquid_address, hyperliquid_secret,
             created_at, updated_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (name.strip(), exchange,
-         creds["lighter_account_index"], creds["lighter_api_key_private"],
-         creds["lighter_api_key_index"], creds["hyperliquid_address"],
+         creds["lighter_wallet_address"], creds["lighter_public_key"],
+         creds["lighter_private_key"], creds["hyperliquid_address"],
          creds["hyperliquid_secret"], now, now),
     )
     conn.commit()
@@ -655,9 +746,9 @@ def update_profile(profile_id: int, *, name: str | None = None,
             raise ValueError(f"unknown exchange: {exchange}")
         fields.append("exchange = ?"); values.append(exchange)
     if credentials:
-        if "lighter_account_index" in credentials:
-            _check_unique_lighter_account(
-                credentials["lighter_account_index"], exclude_id=profile_id
+        if "lighter_wallet_address" in credentials:
+            _check_unique_lighter_wallet(
+                credentials["lighter_wallet_address"], exclude_id=profile_id
             )
         for k in _PROFILE_CRED_FIELDS:
             if k in credentials:
