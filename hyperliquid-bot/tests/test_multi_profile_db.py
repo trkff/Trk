@@ -21,3 +21,12 @@ def test_profiles_table_exists(tmp_path, monkeypatch):
         "hyperliquid_address", "hyperliquid_secret",
         "created_at", "updated_at",
     }
+
+
+def test_profile_id_columns_added(tmp_path, monkeypatch):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "test.db")
+    _reset_conn()
+    db.init_db()
+    for table in ("trades", "signals", "logs"):
+        cols = [r["name"] for r in db.get_conn().execute(f"PRAGMA table_info({table})").fetchall()]
+        assert "profile_id" in cols, f"{table} missing profile_id"

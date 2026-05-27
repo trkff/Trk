@@ -187,6 +187,14 @@ def migrate_db():
     # M7 — rename instâncias dinâmicas legadas (criadas pelo scanner antes do multi-TF)
     _migrate_legacy_dynamic_instances_to_5m(conn)
 
+    # M8a — add profile_id columns to trades/signals/logs
+    for table in ("trades", "signals", "logs"):
+        cols = [r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()]
+        if "profile_id" not in cols:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN profile_id INTEGER DEFAULT 1")
+            conn.execute(f"CREATE INDEX IF NOT EXISTS idx_{table}_profile ON {table}(profile_id)")
+            conn.commit()
+
 
 _LEGACY_STRATEGY_NAMES_TO_5M = [
     "bb_reversion_btc", "bb_reversion_eth", "bb_reversion_sol",
