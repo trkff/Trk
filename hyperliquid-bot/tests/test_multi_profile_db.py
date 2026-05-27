@@ -142,6 +142,25 @@ def test_create_profile_rejects_duplicate_lighter_account(tmp_path, monkeypatch)
         db.create_profile(name="B", exchange="lighter", credentials={"lighter_account_index": "111"})
 
 
+def test_profile_config_helpers(tmp_path, monkeypatch):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "test.db")
+    _reset_conn()
+    db.init_db()
+    db.set_profile_config(1, "bot_status", "running")
+    assert db.get_profile_config(1, "bot_status") == "running"
+    # The underlying table sees the namespaced key
+    row = db.get_conn().execute(
+        "SELECT value FROM config WHERE key = ?", ("profile.1.bot_status",)
+    ).fetchone()
+    assert row is not None and row["value"] == "running"
+    # Missing key returns None (no DEFAULT_CONFIG fallback for profile-scoped keys)
+    assert db.get_profile_config(1, "missing_key") is None
+    # set_profile_configs writes a batch
+    db.set_profile_configs(1, {"sizing.mode": "risk_pct", "assets": '["BTC"]'})
+    assert db.get_profile_config(1, "sizing.mode") == "risk_pct"
+    assert db.get_profile_config(1, "assets") == '["BTC"]'
+
+
 def test_delete_profile_cascades_namespaced_keys(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "DB_PATH", tmp_path / "test.db")
     _reset_conn()

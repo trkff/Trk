@@ -504,6 +504,27 @@ def set_configs(kvs: dict):
     conn.commit()
 
 
+# ── Profile-scoped config helpers ─────────────────────────────────────────
+# Profile-scoped configs live under the `profile.<id>.` key prefix. These
+# helpers bypass DEFAULT_CONFIG, so a missing key returns None (instead of the
+# global default) — callers that need a default should handle it explicitly.
+
+def get_profile_config(profile_id: int, key: str) -> str | None:
+    row = get_conn().execute(
+        "SELECT value FROM config WHERE key = ?",
+        (f"profile.{profile_id}.{key}",),
+    ).fetchone()
+    return row["value"] if row else None
+
+
+def set_profile_config(profile_id: int, key: str, value):
+    set_config(f"profile.{profile_id}.{key}", str(value))
+
+
+def set_profile_configs(profile_id: int, kvs: dict):
+    set_configs({f"profile.{profile_id}.{k}": v for k, v in kvs.items()})
+
+
 # ── last candle timestamp persistence ─────────────────────────────────────
 # Persistem por TF/asset no config table com key `last_ts.<tf>.<asset>`.
 # Evita que restart do bot dispare falso `new_<tf>` na primeira detecção pós-restart
