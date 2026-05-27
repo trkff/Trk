@@ -8,7 +8,7 @@ import json
 import threading
 import time
 
-from flask import Flask, render_template, request, jsonify, redirect, url_for
+from flask import Flask, render_template, request, jsonify, redirect, url_for, g
 from flask_socketio import SocketIO
 
 from bot import db
@@ -31,6 +31,16 @@ def create_app():
             response.headers["Pragma"] = "no-cache"
             response.headers["Expires"] = "0"
         return response
+
+    @app.before_request
+    def _set_active_profile():
+        """Resolve the active profile for the request.
+
+        Phase 2 placeholder: always profile 1. Phase 3 will read
+        session['active_profile_id'] and fall back to the first profile
+        when missing/stale.
+        """
+        g.profile_id = 1
 
     @app.before_request
     def check_configured():
@@ -92,12 +102,12 @@ def create_app():
         from main import get_asset_live_status
         cfg = db.get_all_config()
         stats = db.get_trade_stats()
-        open_trades = db.get_open_trades()
+        open_trades = db.get_open_trades(profile_id=g.profile_id)
         daily_pnl = db.get_daily_pnl()
         total_pnl = db.get_total_pnl()
 
         return jsonify({
-            "bot_status": cfg.get("bot_status", "stopped"),
+            "bot_status": db.get_profile_config(g.profile_id, "bot_status") or "stopped",
             "use_testnet": cfg.get("use_testnet", "true"),
             "daily_pnl": round(daily_pnl, 2),
             "total_pnl": round(total_pnl, 2),
@@ -106,7 +116,7 @@ def create_app():
             "total_closed": stats["total_closed"],
             "open_trades": open_trades,
             "asset_status": get_asset_live_status(),
-            "strategy_stats": db.get_strategy_stats(),
+            "strategy_stats": db.get_strategy_stats(profile_id=g.profile_id),
         })
 
     @app.route("/api/trades")
@@ -134,7 +144,7 @@ def create_app():
     @app.route("/api/strategy-stats")
     def api_strategy_stats():
         days = request.args.get("days", type=int)
-        return jsonify(db.get_strategy_stats(days=days))
+        return jsonify(db.get_strategy_stats(days=days, profile_id=g.profile_id))
 
     @app.route("/api/signals")
     def api_signals():
@@ -147,7 +157,7 @@ def create_app():
     @app.route("/api/strategies", methods=["GET"])
     def api_strategies():
         from bot.strategies.manager import get_all_strategy_metadata
-        return jsonify(get_all_strategy_metadata())
+        return jsonify(get_all_strategy_metadata(profile_id=g.profile_id))
 
     @app.route("/api/strategies/<name>", methods=["POST"])
     def api_save_strategy(name):
@@ -157,13 +167,13 @@ def create_app():
         data = request.get_json() or {}
         enabled = bool(data.get("enabled", False))
         params = data.get("params", {})
-        db.set_strategy_config(name, enabled, params)
+        db.set_strategy_config(name, enabled, params, profile_id=g.profile_id)
         log.info(f"Strategy '{name}' updated: enabled={enabled}")
         return jsonify({"ok": True})
 
     @app.route("/api/strategies/applied", methods=["GET"])
     def api_strategies_applied():
-        """Lista estratégias para a aba Estratégias:
+        """Lista estratégias para a aba Estratégias (do perfil ativo):
         - Todas com scanner_metrics (aplicadas via Scanner)
         - PLUS todas que estão enabled=true (mesmo sem scanner_metrics — configuração legada)
         """
@@ -171,10 +181,12 @@ def create_app():
         from bot.strategies.manager import STRATEGY_MAP
         all_cfg = db.get_all_config()
 
+        prefix = f"profile.{g.profile_id}.strategy."
+
         metrics_by_name: dict[str, dict] = {}
         for key, val in all_cfg.items():
-            if key.startswith("strategy.") and key.endswith(".scanner_metrics"):
-                inst_name = key[len("strategy."):-len(".scanner_metrics")]
+            if key.startswith(prefix) and key.endswith(".scanner_metrics"):
+                inst_name = key[len(prefix):-len(".scanner_metrics")]
                 try:
                     m = _json.loads(val)
                 except _json.JSONDecodeError:
@@ -185,15 +197,15 @@ def create_app():
 
         candidates = set(metrics_by_name.keys())
         for key, val in all_cfg.items():
-            if key.startswith("strategy.") and key.endswith(".enabled") and val == "true":
-                inst_name = key[len("strategy."):-len(".enabled")]
+            if key.startswith(prefix) and key.endswith(".enabled") and val == "true":
+                inst_name = key[len(prefix):-len(".enabled")]
                 candidates.add(inst_name)
 
         result = []
         for inst_name in candidates:
             if inst_name not in STRATEGY_MAP:
                 continue
-            scfg = db.get_strategy_config(inst_name)
+            scfg = db.get_strategy_config(inst_name, profile_id=g.profile_id)
             strategy = STRATEGY_MAP[inst_name]
             result.append({
                 "name":         inst_name,
@@ -212,20 +224,19 @@ def create_app():
     @app.route("/api/analise")
     def api_analise():
         """Cruza scanner metrics com performance ao vivo para análise de padrões.
-        Retorna lista de strategies aplicadas (com scanner_metrics) com:
-        - scanner: trades, wr, pf, roi, tpd, max_dd
-        - live: closed_total, wins, win_rate, pnl, pnl_per_trade, avg_slippage_pct
+        Escopo: perfil ativo.
         """
         import json as _json
         from bot.strategies.manager import STRATEGY_MAP
         all_cfg = db.get_all_config()
-        stats_by_name = {s["strategy"]: s for s in db.get_strategy_stats()}
+        stats_by_name = {s["strategy"]: s for s in db.get_strategy_stats(profile_id=g.profile_id)}
 
+        prefix = f"profile.{g.profile_id}.strategy."
         result = []
         for key, val in all_cfg.items():
-            if not (key.startswith("strategy.") and key.endswith(".scanner_metrics")):
+            if not (key.startswith(prefix) and key.endswith(".scanner_metrics")):
                 continue
-            inst_name = key[len("strategy."):-len(".scanner_metrics")]
+            inst_name = key[len(prefix):-len(".scanner_metrics")]
             if inst_name not in STRATEGY_MAP:
                 continue
             try:
@@ -236,7 +247,7 @@ def create_app():
             closed = stats.get("closed_total", 0) or 0
             pnl = stats.get("pnl", 0.0) or 0.0
             pnl_per_trade = (pnl / closed) if closed > 0 else None
-            scfg = db.get_strategy_config(inst_name)
+            scfg = db.get_strategy_config(inst_name, profile_id=g.profile_id)
             result.append({
                 "name": inst_name,
                 "display_name": STRATEGY_MAP[inst_name].DISPLAY_NAME,
@@ -267,19 +278,19 @@ def create_app():
 
     @app.route("/api/strategies/applied/<name>", methods=["DELETE"])
     def api_strategy_applied_delete(name):
-        """Soft-delete: marca scanner_metrics como archived=true e desativa.
+        """Soft-delete: marca scanner_metrics como archived=true e desativa (no perfil ativo).
         A aba Estratégias filtra arquivadas; a aba Análise continua incluindo (para
         preservar histórico de scanner_metrics × performance live)."""
         import json as _json
-        db.set_config(f"strategy.{name}.enabled", "false")
-        raw = db.get_config(f"strategy.{name}.scanner_metrics")
+        db.set_profile_config(g.profile_id, f"strategy.{name}.enabled", "false")
+        raw = db.get_profile_config(g.profile_id, f"strategy.{name}.scanner_metrics")
         if raw:
             try:
                 m = _json.loads(raw)
             except _json.JSONDecodeError:
                 m = {}
             m["archived"] = True
-            db.set_config(f"strategy.{name}.scanner_metrics", _json.dumps(m))
+            db.set_profile_config(g.profile_id, f"strategy.{name}.scanner_metrics", _json.dumps(m))
         log.info(f"Strategy '{name}' arquivada (some da aba Estratégias; permanece em Análise)")
         return jsonify({"ok": True})
 
@@ -519,7 +530,9 @@ def create_app():
     def api_logs():
         level = request.args.get("level")
         limit = int(request.args.get("limit", 200))
-        logs = db.get_logs(limit, level)
+        show_all = request.args.get("all") == "1"
+        profile_id = None if show_all else g.profile_id
+        logs = db.get_logs(limit, level, profile_id=profile_id)
         return jsonify(logs)
 
     @app.route("/api/config", methods=["GET"])
@@ -542,44 +555,55 @@ def create_app():
     @app.route("/api/bot/start", methods=["POST"])
     def api_bot_start():
         from main import start_bot
-        db.set_config("bot_status", "running")
-        start_bot()
+        db.set_profile_config(g.profile_id, "bot_status", "running")
+        start_bot(profile_id=g.profile_id)
         return jsonify({"ok": True, "status": "running"})
 
     @app.route("/api/bot/pause", methods=["POST"])
     def api_bot_pause():
         from main import pause_bot
-        pause_bot()
+        pause_bot(profile_id=g.profile_id)
         return jsonify({"ok": True, "status": "paused"})
 
     @app.route("/api/bot/stop", methods=["POST"])
     def api_bot_stop():
         from main import stop_bot
-        stop_bot()
+        stop_bot(profile_id=g.profile_id)
         return jsonify({"ok": True, "status": "stopped"})
 
     # ── SocketIO — push updates every 5 seconds ────────────────────
 
     def background_pusher():
+        """Push overview updates for every profile.
+
+        Each profile gets its own event named overview_update.<id>; the client
+        listens only to the event matching its active profile. Phase 5 may
+        switch to SocketIO rooms for tighter scoping.
+        """
         from main import get_asset_live_status
         while True:
             try:
-                cfg = db.get_all_config()
-                stats = db.get_trade_stats()
-                open_trades = db.get_open_trades()
-                daily_pnl = db.get_daily_pnl()
-                total_pnl = db.get_total_pnl()
-
-                socketio.emit("overview_update", {
-                    "bot_status": cfg.get("bot_status", "stopped"),
-                    "daily_pnl": round(daily_pnl, 2),
-                    "total_pnl": round(total_pnl, 2),
-                    "win_rate": round(stats["win_rate"], 1),
-                    "today_count": stats["today_count"],
-                    "open_trades": open_trades,
-                    "asset_status": get_asset_live_status(),
-                    "strategy_stats": db.get_strategy_stats(),
-                })
+                for prof in db.list_profiles():
+                    pid = prof["id"]
+                    stats = db.get_trade_stats()
+                    open_trades = db.get_open_trades(profile_id=pid)
+                    daily_pnl = db.get_daily_pnl()
+                    total_pnl = db.get_total_pnl()
+                    payload = {
+                        "profile_id": pid,
+                        "bot_status": db.get_profile_config(pid, "bot_status") or "stopped",
+                        "daily_pnl": round(daily_pnl, 2),
+                        "total_pnl": round(total_pnl, 2),
+                        "win_rate": round(stats["win_rate"], 1),
+                        "today_count": stats["today_count"],
+                        "open_trades": open_trades,
+                        "asset_status": get_asset_live_status(),
+                        "strategy_stats": db.get_strategy_stats(profile_id=pid),
+                    }
+                    socketio.emit(f"overview_update.{pid}", payload)
+                    # Backwards-compat: keep the legacy event for the active-profile flow
+                    if pid == 1:
+                        socketio.emit("overview_update", payload)
             except Exception as e:
                 log.debug(f"background_pusher error: {e}")
             time.sleep(5)
