@@ -38,6 +38,12 @@
     <button class="btn btn-outline" onclick="loadLogs()" style="cursor:pointer">Atualizar</button>
   </div>
   <div class="filter-group" style="align-self:flex-end;">
+    <label style="display:flex;align-items:center;gap:6px;font-size:0.8rem;cursor:pointer;">
+      <input type="checkbox" id="f-all-profiles" onchange="loadLogs()" style="cursor:pointer;">
+      <span>Mostrar todos os perfis</span>
+    </label>
+  </div>
+  <div class="filter-group" style="align-self:flex-end;">
     <span id="f-count" style="font-size:0.75rem;color:#64748B;font-family:'JetBrains Mono',monospace;"></span>
   </div>
 </div>
@@ -57,9 +63,11 @@ let _searchTimer = null;
 async function loadLogs() {
   const level = document.getElementById('f-level').value;
   const limit = document.getElementById('f-limit').value || '300';
+  const showAll = document.getElementById('f-all-profiles').checked;
   const params = new URLSearchParams();
   if (level) params.set('level', level);
   params.set('limit', limit);
+  if (showAll) params.set('all', '1');
 
   const logs = await apiGet('/api/logs?' + params);
   if (!logs) return;

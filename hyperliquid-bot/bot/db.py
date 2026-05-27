@@ -226,6 +226,13 @@ def migrate_db():
     # names this codebase uses: lighter_wallet_address/public_key/private_key).
     _fix_profile_credential_columns(conn)
 
+    # Safety sweep — re-runs on every init_db (no marker gate). Catches
+    # stray legacy keys an older process may have written into the global
+    # namespace after M8b ran (e.g. a stale pm2-managed bot still calling
+    # the old set_strategy_config that wrote `strategy.<name>.enabled`
+    # directly). Idempotent on a clean DB; no-op when nothing matches.
+    _sweep_stray_profile_keys(conn)
+
 
 _LEGACY_STRATEGY_NAMES_TO_5M = [
     "bb_reversion_btc", "bb_reversion_eth", "bb_reversion_sol",
@@ -445,6 +452,37 @@ def _migrate_to_multi_profile(conn):
         "ON CONFLICT(key) DO UPDATE SET value = 'done'"
     )
     conn.commit()
+
+
+def _sweep_stray_profile_keys(conn):
+    """Move any post-M8 stray per-profile config keys into `profile.1.*`.
+
+    Runs on every `init_db()` (no marker gate). Idempotent: rows are only
+    moved when they pass `_is_m8_profile_key` AND `profile.1.<key>` is not
+    already populated. This is a defensive sweep — the normal path is for
+    the running code to write to the namespaced keys directly.
+    """
+    rows = conn.execute("SELECT key, value FROM config").fetchall()
+    moved = 0
+    for row in rows:
+        k = row["key"]
+        if not _is_m8_profile_key(k):
+            continue
+        new_key = f"profile.1.{k}"
+        existing = conn.execute(
+            "SELECT value FROM config WHERE key = ?", (new_key,)
+        ).fetchone()
+        if existing is None:
+            # No namespaced copy yet — promote the stray to be it
+            conn.execute(
+                "INSERT INTO config (key, value) VALUES (?, ?)",
+                (new_key, row["value"]),
+            )
+        # Drop the stray either way (the namespaced version is authoritative)
+        conn.execute("DELETE FROM config WHERE key = ?", (k,))
+        moved += 1
+    if moved:
+        conn.commit()
 
 
 _M8C_COLUMN_RENAMES = (

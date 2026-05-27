@@ -22,10 +22,45 @@ function updateStatusIndicator(status) {
 }
 
 // ── SocketIO — overview push updates ───────────────────────────────
-socket.on('overview_update', function(data) {
+//
+// Backend emits one `overview_update.<profile_id>` per running profile every
+// 5s (plus a legacy `overview_update` for profile 1 only). The active-profile
+// payload drives the sidebar status indicator + page-specific listeners.
+// Status dots inside the profile dropdown listen to ALL profiles so users see
+// their state live without switching context.
+
+function _handleOverviewUpdate(data) {
+  const pid = data && data.profile_id;
+  // Always keep the dropdown dots fresh for whichever profile this event is for
+  if (pid != null) {
+    const li = document.querySelector('#profileList li[data-id="' + pid + '"]');
+    if (li) {
+      const dot = li.querySelector('.profile-status-dot');
+      if (dot) dot.className = 'profile-status-dot ' + (data.bot_status || 'stopped');
+    }
+    if (pid === _activeProfileId) {
+      const headDot = document.getElementById('profileStatusDot');
+      if (headDot) headDot.className = 'profile-status-dot ' + (data.bot_status || 'stopped');
+    }
+  }
+  // Only the active profile's payload drives the main UI
+  if (pid != null && pid !== _activeProfileId) return;
   updateStatusIndicator(data.bot_status);
-  // Page-specific handlers can listen via custom events
   document.dispatchEvent(new CustomEvent('hlUpdate', { detail: data }));
+}
+
+// Catch every `overview_update.<pid>` event (Socket.IO v3+ supports onAny)
+if (typeof socket.onAny === 'function') {
+  socket.onAny(function(event, data) {
+    if (typeof event === 'string' && event.indexOf('overview_update.') === 0) {
+      _handleOverviewUpdate(data);
+    }
+  });
+}
+
+// Legacy fallback: profile 1 still emits `overview_update` for backwards-compat
+socket.on('overview_update', function(data) {
+  _handleOverviewUpdate(data);
 });
 
 socket.on('connect', function() {
