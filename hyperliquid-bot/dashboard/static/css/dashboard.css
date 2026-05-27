@@ -682,6 +682,9 @@ input:focus, select:focus {
   justify-content: center;
   z-index: 1000;
 }
+/* Author CSS `display: flex` was overriding the UA's [hidden]→display:none
+   rule, so setting back.hidden=true wasn't actually closing the modal. */
+.modal-backdrop[hidden] { display: none !important; }
 .modal {
   background: var(--bg-card);
   border: 1px solid var(--border-light);
