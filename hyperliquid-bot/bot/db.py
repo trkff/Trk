@@ -871,13 +871,13 @@ def get_signals(limit: int = 100, offset: int = 0, strategy_name: str = None) ->
     return [dict(r) for r in rows]
 
 
-def get_strategy_config(strategy_name: str) -> dict:
-    enabled_key = f"strategy.{strategy_name}.enabled"
-    params_key = f"strategy.{strategy_name}.params"
+def get_strategy_config(strategy_name: str, profile_id: int = 1) -> dict:
+    enabled_key = f"profile.{profile_id}.strategy.{strategy_name}.enabled"
+    params_key = f"profile.{profile_id}.strategy.{strategy_name}.params"
     enabled_raw = get_config(enabled_key)
     if enabled_raw is None:
-        # First time this strategy is seen — persist default so restarts respect it.
-        # Default OFF: usuário precisa ativar explicitamente na tela de Config.
+        # First time this strategy is seen on this profile — persist default so
+        # restarts respect it. Default OFF: usuário precisa ativar explicitamente.
         enabled_raw = "false"
         set_config(enabled_key, enabled_raw)
     enabled = enabled_raw == "true"
@@ -889,10 +889,10 @@ def get_strategy_config(strategy_name: str) -> dict:
     return {"enabled": enabled, "params": params}
 
 
-def set_strategy_config(strategy_name: str, enabled: bool, params: dict):
+def set_strategy_config(strategy_name: str, enabled: bool, params: dict, profile_id: int = 1):
     set_configs({
-        f"strategy.{strategy_name}.enabled": "true" if enabled else "false",
-        f"strategy.{strategy_name}.params": json.dumps(params),
+        f"profile.{profile_id}.strategy.{strategy_name}.enabled": "true" if enabled else "false",
+        f"profile.{profile_id}.strategy.{strategy_name}.params": json.dumps(params),
     })
 
 

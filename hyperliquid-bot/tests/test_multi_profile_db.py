@@ -142,6 +142,23 @@ def test_create_profile_rejects_duplicate_lighter_account(tmp_path, monkeypatch)
         db.create_profile(name="B", exchange="lighter", credentials={"lighter_account_index": "111"})
 
 
+def test_strategy_config_by_profile(tmp_path, monkeypatch):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "test.db")
+    _reset_conn()
+    db.init_db()
+    db.set_strategy_config("bb_stoch_btc_5m", True, {"x": 1}, profile_id=1)
+    cfg = db.get_strategy_config("bb_stoch_btc_5m", profile_id=1)
+    assert cfg["enabled"] is True and cfg["params"] == {"x": 1}
+    # Different profile sees defaults
+    pid2 = db.create_profile(name="P2", exchange="lighter", credentials={})
+    cfg2 = db.get_strategy_config("bb_stoch_btc_5m", profile_id=pid2)
+    assert cfg2["enabled"] is False and cfg2["params"] == {}
+    # And persisting on profile 2 doesn't affect profile 1
+    db.set_strategy_config("bb_stoch_btc_5m", True, {"y": 2}, profile_id=pid2)
+    cfg1 = db.get_strategy_config("bb_stoch_btc_5m", profile_id=1)
+    assert cfg1["params"] == {"x": 1}
+
+
 def test_profile_config_helpers(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "DB_PATH", tmp_path / "test.db")
     _reset_conn()
