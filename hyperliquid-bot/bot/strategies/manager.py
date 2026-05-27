@@ -350,19 +350,32 @@ def register_dynamic_instance(scanner_strategy: str, asset: str,
 
 
 def _load_dynamic_strategies():
-    """No startup: varre o DB por `strategy.<name>.params` cujo <name> não esteja
-    em REGISTERED_STRATEGIES mas case com algum prefixo conhecido — recria as instâncias.
+    """No startup: varre o DB por `*.strategy.<name>.params` cujo <name> não
+    esteja em REGISTERED_STRATEGIES mas case com algum prefixo conhecido —
+    recria as instâncias. Pós-multi-profile, as keys vivem em
+    `profile.<pid>.strategy.<name>.params`; também aceita o formato legado
+    `strategy.<name>.params` (caso uma DB pré-M8 boote pela primeira vez).
+
     Reconhece dois formatos de nome:
       - {prefix}_{asset}           → legado 5m sem TF no nome (ex: bb_stoch_btc)
-      - {prefix}_{asset}_{tf}[_{tag_slug}]   → novo formato com TF (ex: bb_stoch_btc_15m, bb_stoch_btc_5m_57_36)
+      - {prefix}_{asset}_{tf}[_{tag_slug}]   → novo formato com TF
+    Registration is global (STRATEGY_MAP doesn't track profile) — each
+    unique strategy name is registered once even if it appears under
+    multiple profiles.
     """
+    import re
+    # Aceita "profile.<pid>.strategy.<name>.params" OU "strategy.<name>.params"
+    pat = re.compile(r"^(?:profile\.\d+\.)?strategy\.(.+)\.params$")
+    seen: set[str] = set()
     all_cfg = db.get_all_config()
     for key in all_cfg:
-        if not key.startswith("strategy.") or not key.endswith(".params"):
+        m = pat.match(key)
+        if not m:
             continue
-        inst_name = key[len("strategy."):-len(".params")]
-        if inst_name in STRATEGY_MAP:
+        inst_name = m.group(1)
+        if inst_name in STRATEGY_MAP or inst_name in seen:
             continue
+        seen.add(inst_name)
         for prefix, cls, scanner_name in _STRATEGY_CLASS_BY_PREFIX:
             if not inst_name.startswith(prefix + "_"):
                 continue
