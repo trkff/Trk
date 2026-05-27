@@ -313,10 +313,16 @@ def close_position(client: BaseExchangeClient, asset: str, trade_id: int,
             open_data = _get_fill_data(client, asset, stored_oid, since_ms) if stored_oid else {"fee": 0.0, "closedPnl": 0.0}
             close_data = _get_fill_data(client, asset, close_oid, since_ms) if close_oid else {"fee": 0.0, "closedPnl": 0.0}
 
-            # Fallback: se o oid não casou (ex: Lighter usa tradeId mas market_close retorna txHash),
-            # busca fills desde imediatamente antes do close e soma o PnL
+            # Fallback: se o oid não casou (ex: Lighter usa tradeId mas market_close
+            # retorna txHash), soma o closedPnl de todos os fills da janela do trade
+            # (entry → close). Janela ampla é necessária porque o fill na Lighter
+            # pode ter ts segundos ANTES do `pre_close_ms` (matching engine time,
+            # não o instante em que o bot detectou o close — caso real: bb_mid_exit
+            # disparou às 21:20:43 mas o fill já existia na Lighter desde 21:20:23,
+            # antes da janela `pre_close_ms - 5s`). O fill de OPEN tem closedPnl=0
+            # na Lighter, então somar não distorce.
             if close_data["closedPnl"] == 0.0 and close_data["fee"] == 0.0:
-                close_data = _get_close_pnl_fallback(client, asset, pre_close_ms - 5_000)
+                close_data = _get_close_pnl_fallback(client, asset, since_ms)
 
             total_fees = open_data["fee"] + close_data["fee"]
 
