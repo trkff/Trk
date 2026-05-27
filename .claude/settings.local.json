@@ -52,7 +52,8 @@
       "Bash(where pm2-startup *)",
       "Bash(pm2-startup install *)",
       "Bash(reg query *)",
-      "Bash(gh repo *)"
+      "Bash(gh repo *)",
+      "Bash(mkdir -p \"C:\\\\Users\\\\User\\\\Documents\\\\Vibe Code\\\\RazorHL\\\\hyperliquid-bot\\\\docs\\\\superpowers\\\\plans\")"
     ],
     "defaultMode": "bypassPermissions"
   },

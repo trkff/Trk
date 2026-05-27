@@ -136,3 +136,26 @@ def test_activate_profile_persists_in_session(client):
 def test_activate_profile_404_when_missing(client):
     resp = client.post("/api/profiles/9999/activate")
     assert resp.status_code == 404
+
+
+def test_patch_can_clear_credential_with_null(client):
+    """Sending null for a credential field overwrites the stored value with NULL
+    (vs. omitting the field, which preserves it). Lets the dashboard "Limpar"
+    button actually wipe a wallet/key.
+    """
+    pid = db.create_profile(name="X", exchange="lighter", credentials={
+        "lighter_wallet_address": "0xWALLET",
+        "lighter_public_key": "PUB",
+        "lighter_private_key": "PRIV",
+    })
+    # Omitting a field preserves it
+    client.patch(f"/api/profiles/{pid}", json={"credentials": {"lighter_public_key": "NEWPUB"}})
+    p = db.get_profile(pid)
+    assert p["lighter_wallet_address"] == "0xWALLET"
+    assert p["lighter_public_key"] == "NEWPUB"
+    # Sending null clears it
+    client.patch(f"/api/profiles/{pid}", json={"credentials": {"lighter_wallet_address": None}})
+    p = db.get_profile(pid)
+    assert p["lighter_wallet_address"] is None
+    assert p["lighter_public_key"] == "NEWPUB"  # untouched
+    assert p["lighter_private_key"] == "PRIV"  # untouched

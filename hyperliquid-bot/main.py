@@ -13,6 +13,7 @@ import time
 import sys
 import threading
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 import pandas as pd
@@ -49,6 +50,12 @@ _bot_lock = threading.Lock()
 candle_mgr: BinanceCandleManager | LighterCandleManager | None = None
 _candle_mgr_owner_pid: int | None = None  # profile whose client the LighterCandleManager is using
 _candle_mgr_lock = threading.Lock()
+
+# Fans `_on_candle_close_dispatch` work out across profiles so a slow
+# process_asset on one profile doesn't delay the others. Bounded at 8
+# concurrent workers — enough for a handful of profiles, low enough to
+# avoid hammering the Lighter REST with simultaneous get_candles bursts.
+_dispatch_pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="dispatch")
 
 _asset_live_status: dict[str, dict] = {}
 _status_lock = threading.Lock()
@@ -217,10 +224,15 @@ def _on_candle_close_dispatch(asset: str, interval: str):
     last_1h_ts  = db.get_last_candle_ts("1h")
     last_4h_ts  = db.get_last_candle_ts("4h")
     last_1d_ts  = db.get_last_candle_ts("1d")
-    for pid in _running_profile_ids():
+    # Fan-out per profile via the bounded thread pool. Each profile's
+    # process_asset runs concurrently with the others — a slow REST seed on
+    # profile 1 no longer delays profile 2's signal evaluation. Within a
+    # profile the call is still serial (no per-profile concurrency needed —
+    # one candle close = one work unit).
+    def _run_for_profile(pid: int):
         client = _bot_clients.get(pid)
         if client is None:
-            continue
+            return
         cfg = _build_cfg_for_profile(pid)
         # Profile filter: only act if this asset is in the profile's universe.
         try:
@@ -230,7 +242,7 @@ def _on_candle_close_dispatch(asset: str, interval: str):
             profile_assets = []
         active_assets = set(get_active_assets(profile_assets, profile_id=pid))
         if asset not in active_assets:
-            continue
+            return
         try:
             process_asset(
                 asset, cfg,
@@ -239,6 +251,22 @@ def _on_candle_close_dispatch(asset: str, interval: str):
             )
         except Exception:
             log.exception("[%s] process_asset failed for profile %s", asset, pid)
+
+    pids = _running_profile_ids()
+    if not pids:
+        return
+    if len(pids) == 1:
+        _run_for_profile(pids[0])
+        return
+    # Submit and let workers run independently — we don't await results so
+    # the candle manager's worker thread returns immediately.
+    for pid in pids:
+        try:
+            _dispatch_pool.submit(_run_for_profile, pid)
+        except RuntimeError:
+            # Pool was shut down (e.g. during process exit) — fall back to
+            # running synchronously so the close isn't dropped.
+            _run_for_profile(pid)
 
 
 def bot_loop(profile_id: int = 1):

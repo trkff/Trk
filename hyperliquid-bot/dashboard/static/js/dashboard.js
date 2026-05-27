@@ -199,6 +199,12 @@ function openProfileModal(opts) {
   const form = document.getElementById('profileForm');
   if (!back || !form) return;
   form.reset();
+  // Reset any "armed for clear" markers from a previous opening of the modal
+  form.querySelectorAll('.cred-clear.armed').forEach(b => b.classList.remove('armed'));
+  form.querySelectorAll('input.armed-clear').forEach(i => {
+    i.classList.remove('armed-clear');
+    i.disabled = false;
+  });
   form.dataset.mode = opts.mode;
   form.dataset.id = opts.id != null ? String(opts.id) : '';
   const titles = { create: 'Novo perfil', rename: 'Renomear perfil', creds: 'Editar credenciais' };
@@ -277,6 +283,27 @@ document.addEventListener('DOMContentLoaded', () => {
     };
     if (exch) exch.addEventListener('change', updateExchangeFields);
 
+    // Per-credential "clear" toggle: arms a flag that submit reads to send
+    // explicit null (which makes the backend overwrite the column with NULL).
+    // Click again to disarm.
+    form.querySelectorAll('.cred-clear').forEach(btn => {
+      btn.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        const fieldName = btn.dataset.clear;
+        const input = form.querySelector(`input[name="${fieldName}"]`);
+        if (!input) return;
+        const armed = btn.classList.toggle('armed');
+        if (armed) {
+          input.classList.add('armed-clear');
+          input.value = '';
+          input.disabled = true;
+        } else {
+          input.classList.remove('armed-clear');
+          input.disabled = false;
+        }
+      });
+    });
+
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const fd = new FormData(form);
@@ -294,8 +321,14 @@ document.addEventListener('DOMContentLoaded', () => {
                          'hyperliquid_address','hyperliquid_secret'];
       const creds = {};
       credKeys.forEach(k => {
+        const armed = form.querySelector(`.cred-clear[data-clear="${k}"].armed`);
+        if (armed) {
+          creds[k] = null;  // explicit clear — backend overwrites with NULL
+          return;
+        }
         const v = (fd.get(k) || '').toString().trim();
         if (v) creds[k] = v;
+        // else: omit → backend preserves existing value
       });
       let res;
       if (mode === 'create') {

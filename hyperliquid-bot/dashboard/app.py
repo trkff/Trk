@@ -111,10 +111,10 @@ def create_app():
     def api_overview():
         from main import get_asset_live_status
         cfg = db.get_all_config()
-        stats = db.get_trade_stats()
+        stats = db.get_trade_stats(profile_id=g.profile_id)
         open_trades = db.get_open_trades(profile_id=g.profile_id)
-        daily_pnl = db.get_daily_pnl()
-        total_pnl = db.get_total_pnl()
+        daily_pnl = db.get_daily_pnl(profile_id=g.profile_id)
+        total_pnl = db.get_total_pnl(profile_id=g.profile_id)
 
         return jsonify({
             "bot_status": db.get_profile_config(g.profile_id, "bot_status") or "stopped",
@@ -645,6 +645,30 @@ def create_app():
                 "error": "close open positions before deleting this profile",
                 "open_count": len(open_rows),
             }), 409
+
+        # Stop the bot first if it's running — the reaper joins the worker,
+        # disconnects its client and refreshes the candle manager (which will
+        # rebuild around a different profile's client). Doing this synchronously
+        # avoids the window where _on_candle_close_dispatch could process a
+        # candle for a profile_id that we're about to delete.
+        import main as bot_main
+        with bot_main._bot_lock:
+            t = bot_main._bot_threads.get(pid)
+        if t is not None:
+            try:
+                bot_main.stop_bot(profile_id=pid)
+            except Exception:
+                log.exception("stop_bot failed for profile %s during delete", pid)
+            # Wait for the reaper to finish removing the profile from the dicts.
+            # 16s = stop_bot's join(15s) + a buffer for the candle-mgr refresh.
+            deadline = time.time() + 16
+            while time.time() < deadline:
+                with bot_main._bot_lock:
+                    still_present = pid in bot_main._bot_threads
+                if not still_present:
+                    break
+                time.sleep(0.25)
+
         db.delete_profile(pid)
         # If we were sitting on this profile, fall back to the first remaining
         if session.get("active_profile_id") == pid:
@@ -702,10 +726,10 @@ def create_app():
             try:
                 for prof in db.list_profiles():
                     pid = prof["id"]
-                    stats = db.get_trade_stats()
+                    stats = db.get_trade_stats(profile_id=pid)
                     open_trades = db.get_open_trades(profile_id=pid)
-                    daily_pnl = db.get_daily_pnl()
-                    total_pnl = db.get_total_pnl()
+                    daily_pnl = db.get_daily_pnl(profile_id=pid)
+                    total_pnl = db.get_total_pnl(profile_id=pid)
                     payload = {
                         "profile_id": pid,
                         "bot_status": db.get_profile_config(pid, "bot_status") or "stopped",

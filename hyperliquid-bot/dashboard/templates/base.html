@@ -135,14 +135,40 @@
         </label>
         <fieldset class="creds creds-lighter">
           <legend>Lighter</legend>
-          <label>Wallet Address <input name="lighter_wallet_address" type="text"></label>
-          <label>Public Key <input name="lighter_public_key" type="password"></label>
-          <label>Private Key <input name="lighter_private_key" type="password"></label>
+          <label class="cred-row">Wallet Address
+            <span class="cred-input-wrap">
+              <input name="lighter_wallet_address" type="text">
+              <button type="button" class="cred-clear" data-clear="lighter_wallet_address" title="Limpar">×</button>
+            </span>
+          </label>
+          <label class="cred-row">Public Key
+            <span class="cred-input-wrap">
+              <input name="lighter_public_key" type="password">
+              <button type="button" class="cred-clear" data-clear="lighter_public_key" title="Limpar">×</button>
+            </span>
+          </label>
+          <label class="cred-row">Private Key
+            <span class="cred-input-wrap">
+              <input name="lighter_private_key" type="password">
+              <button type="button" class="cred-clear" data-clear="lighter_private_key" title="Limpar">×</button>
+            </span>
+          </label>
+          <small style="color:#94a3b8;display:block;margin-top:4px;">Em branco = manter atual. Clique × para apagar.</small>
         </fieldset>
         <fieldset class="creds creds-hl" hidden>
           <legend>Hyperliquid</legend>
-          <label>Address <input name="hyperliquid_address" type="text"></label>
-          <label>Secret <input name="hyperliquid_secret" type="password"></label>
+          <label class="cred-row">Address
+            <span class="cred-input-wrap">
+              <input name="hyperliquid_address" type="text">
+              <button type="button" class="cred-clear" data-clear="hyperliquid_address" title="Limpar">×</button>
+            </span>
+          </label>
+          <label class="cred-row">Secret
+            <span class="cred-input-wrap">
+              <input name="hyperliquid_secret" type="password">
+              <button type="button" class="cred-clear" data-clear="hyperliquid_secret" title="Limpar">×</button>
+            </span>
+          </label>
         </fieldset>
         <div class="modal-actions">
           <button type="button" data-close>Cancelar</button>

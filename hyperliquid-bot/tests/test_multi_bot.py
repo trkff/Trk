@@ -92,6 +92,11 @@ def test_on_candle_close_dispatches_only_to_running_profiles(fresh_db, monkeypat
         bot_main._on_candle_close_dispatch("SOL", "5m")  # not in any profile
         bot_main._on_candle_close_dispatch("BTC", "15m")  # gated, ignored
 
+        # Dispatch fans out via the thread pool with >1 profile — drain it.
+        deadline = time.time() + 5
+        while len(seen) < 3 and time.time() < deadline:
+            time.sleep(0.05)
+
         assert (1, "BTC") in seen
         assert (pid2, "BTC") in seen
         assert (pid2, "ETH") in seen

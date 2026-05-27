@@ -915,28 +915,57 @@ def get_today_trades() -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def get_daily_pnl() -> float:
+def get_daily_pnl(profile_id: int | None = None) -> float:
+    """PnL today (UTC). Pass profile_id to scope; None = aggregate across all profiles."""
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    row = get_conn().execute(
-        "SELECT COALESCE(SUM(pnl), 0) as total FROM trades WHERE status = 'closed' AND exit_time >= ?",
-        (today,),
-    ).fetchone()
+    if profile_id is None:
+        row = get_conn().execute(
+            "SELECT COALESCE(SUM(pnl), 0) as total FROM trades "
+            "WHERE status = 'closed' AND exit_time >= ?",
+            (today,),
+        ).fetchone()
+    else:
+        row = get_conn().execute(
+            "SELECT COALESCE(SUM(pnl), 0) as total FROM trades "
+            "WHERE profile_id = ? AND status = 'closed' AND exit_time >= ?",
+            (profile_id, today),
+        ).fetchone()
     return row["total"]
 
 
-def get_total_pnl() -> float:
-    row = get_conn().execute(
-        "SELECT COALESCE(SUM(pnl), 0) as total FROM trades WHERE status = 'closed'"
-    ).fetchone()
+def get_total_pnl(profile_id: int | None = None) -> float:
+    """All-time PnL. Pass profile_id to scope; None = aggregate across all profiles."""
+    if profile_id is None:
+        row = get_conn().execute(
+            "SELECT COALESCE(SUM(pnl), 0) as total FROM trades WHERE status = 'closed'"
+        ).fetchone()
+    else:
+        row = get_conn().execute(
+            "SELECT COALESCE(SUM(pnl), 0) as total FROM trades "
+            "WHERE profile_id = ? AND status = 'closed'",
+            (profile_id,),
+        ).fetchone()
     return row["total"]
 
 
-def get_trade_stats() -> dict:
+def get_trade_stats(profile_id: int | None = None) -> dict:
+    """Closed-trade counts. Pass profile_id to scope; None = aggregate."""
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     conn = get_conn()
-    total_closed = conn.execute("SELECT COUNT(*) as c FROM trades WHERE status='closed'").fetchone()["c"]
-    wins = conn.execute("SELECT COUNT(*) as c FROM trades WHERE status='closed' AND pnl > 0").fetchone()["c"]
-    today_count = conn.execute("SELECT COUNT(*) as c FROM trades WHERE entry_time >= ?", (today,)).fetchone()["c"]
+    where = "" if profile_id is None else "AND profile_id = ?"
+    args = () if profile_id is None else (profile_id,)
+    total_closed = conn.execute(
+        f"SELECT COUNT(*) as c FROM trades WHERE status='closed' {where}",
+        args,
+    ).fetchone()["c"]
+    wins = conn.execute(
+        f"SELECT COUNT(*) as c FROM trades WHERE status='closed' AND pnl > 0 {where}",
+        args,
+    ).fetchone()["c"]
+    today_count = conn.execute(
+        f"SELECT COUNT(*) as c FROM trades WHERE entry_time >= ? {where}",
+        (today, *args),
+    ).fetchone()["c"]
     return {
         "total_closed": total_closed,
         "wins": wins,
