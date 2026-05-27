@@ -280,8 +280,16 @@ document.addEventListener('DOMContentLoaded', () => {
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const fd = new FormData(form);
-      const mode = form.dataset.mode;
-      const id = form.dataset.id;
+      // Mode/id can be lost if the modal was rendered without openProfileModal
+      // running first (race during initial load, browser back, etc). Default
+      // to "create" when mode is unset; treat any non-numeric id as missing.
+      const mode = form.dataset.mode || 'create';
+      const idRaw = form.dataset.id;
+      const id = (idRaw && /^\d+$/.test(idRaw)) ? idRaw : null;
+      if (mode !== 'create' && id == null) {
+        alert('Nao foi possivel identificar o perfil a editar. Recarregue a pagina e tente novamente.');
+        return;
+      }
       const credKeys = ['lighter_wallet_address','lighter_public_key','lighter_private_key',
                          'hyperliquid_address','hyperliquid_secret'];
       const creds = {};
