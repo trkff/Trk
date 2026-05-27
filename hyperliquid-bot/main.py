@@ -47,6 +47,7 @@ _stop_events: dict[int, threading.Event] = {}
 _bot_lock = threading.Lock()
 
 candle_mgr: BinanceCandleManager | LighterCandleManager | None = None
+_candle_mgr_owner_pid: int | None = None  # profile whose client the LighterCandleManager is using
 _candle_mgr_lock = threading.Lock()
 
 _asset_live_status: dict[str, dict] = {}
@@ -115,8 +116,11 @@ def _refresh_candle_manager_assets():
     """Create/update/teardown the singleton candle manager based on active profiles.
 
     Safe to call concurrently — `_candle_mgr_lock` serializes lifecycle changes.
+    Also handles the LighterCandleManager's owner-client lifecycle: if the
+    profile whose client the manager is holding gets reaped, we tear the
+    manager down and respawn it bound to a still-running profile's client.
     """
-    global candle_mgr
+    global candle_mgr, _candle_mgr_owner_pid
     with _candle_mgr_lock:
         union = _union_assets()
         intervals = _required_intervals_union()
@@ -127,30 +131,56 @@ def _refresh_candle_manager_assets():
                 except Exception:
                     log.exception("Error stopping candle manager")
                 candle_mgr = None
+                _candle_mgr_owner_pid = None
                 log.info("Candle manager torn down — no running profiles")
             return
+
+        cfg = db.get_all_config()
+        selected_exchange = cfg.get("selected_exchange", "lighter")
+        use_lighter_ws = (cfg.get("use_lighter_ws_candles", "true").lower() == "true")
+
+        # If the LighterCandleManager's owner client was reaped (no longer in
+        # _bot_clients), tear it down so we rebuild with a still-running
+        # profile's client below.
+        if (
+            candle_mgr is not None
+            and _candle_mgr_owner_pid is not None
+            and _candle_mgr_owner_pid not in _bot_clients
+        ):
+            log.info(
+                "Candle manager owner profile %s was reaped — rebuilding with new owner",
+                _candle_mgr_owner_pid,
+            )
+            try:
+                candle_mgr.stop()
+            except Exception:
+                log.exception("Error stopping stale candle manager")
+            candle_mgr = None
+            _candle_mgr_owner_pid = None
+
         if candle_mgr is None:
-            cfg = db.get_all_config()
-            selected_exchange = cfg.get("selected_exchange", "lighter")
-            use_lighter_ws = (cfg.get("use_lighter_ws_candles", "true").lower() == "true")
-            # Build a client just for the candle manager's REST seed when on Lighter
-            # — uses profile 1 by default (Lighter REST is auth-less for candle reads).
-            sample_pid = next(iter(_bot_clients), 1)
-            sample_client = _bot_clients.get(sample_pid)
+            # Lighter REST is auth-less for candle reads — any running profile's
+            # client works. Pick the lowest profile_id deterministically so logs
+            # stay readable across restarts.
+            running_pids = sorted(pid for pid in _bot_clients if pid in _bot_threads)
+            sample_client = _bot_clients.get(running_pids[0]) if running_pids else None
             if selected_exchange == "lighter" and use_lighter_ws and sample_client is not None:
-                log.info("Spawning shared LighterCandleManager assets=%s intervals=%s", union, intervals)
+                log.info("Spawning shared LighterCandleManager (owner=profile %s) assets=%s intervals=%s",
+                         running_pids[0], union, intervals)
                 candle_mgr = LighterCandleManager(
                     client=sample_client,
                     assets=union,
                     intervals=intervals,
                     on_candle_close=_on_candle_close_dispatch,
                 )
+                _candle_mgr_owner_pid = running_pids[0]
             else:
                 log.info("Spawning shared BinanceCandleManager assets=%s intervals=%s", union, intervals)
                 candle_mgr = BinanceCandleManager(
                     union, on_candle_close=_on_candle_close_dispatch,
                     intervals=intervals,
                 )
+                _candle_mgr_owner_pid = None  # Binance manager doesn't hold a profile client
             candle_mgr.start()
         else:
             try:
@@ -559,6 +589,11 @@ def start_bot(profile_id: int = 1):
     given profile_id. Builds a fresh exchange client and stop event for the
     profile, persists them in the global dicts, then triggers a candle manager
     refresh so the new asset universe gets subscribed.
+
+    Sets `bot_status="starting"` before the thread spawns; `bot_loop` flips it
+    to `"running"` only after `client.connect()` succeeds. This closes the
+    race where `_on_candle_close_dispatch` saw status==running and called
+    `process_asset` against a client that hadn't completed auth yet.
     """
     with _bot_lock:
         existing = _bot_threads.get(profile_id)
@@ -572,13 +607,15 @@ def start_bot(profile_id: int = 1):
             db.set_profile_config(profile_id, "bot_status", "error")
             return None
         _stop_events[profile_id] = threading.Event()
+        # Intermediate state — dispatch filters on "running" so candle fan-out
+        # waits for bot_loop's own status flip after a successful connect.
+        db.set_profile_config(profile_id, "bot_status", "starting")
         t = threading.Thread(
             target=bot_loop, args=(profile_id,),
             daemon=True, name=f"bot-loop-p{profile_id}",
         )
         _bot_threads[profile_id] = t
         t.start()
-    db.set_profile_config(profile_id, "bot_status", "running")
     _refresh_candle_manager_assets()
     return t
 

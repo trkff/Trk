@@ -380,7 +380,11 @@ def _is_m8_profile_key(key: str) -> bool:
 def _migrate_to_multi_profile(conn):
     """M8b — seed Default profile (id=1) and namespace per-profile config keys.
 
-    Idempotent via the `_migration_multi_profile=done` marker.
+    Idempotent via the `_migration_multi_profile=done` marker. Wrapped in a
+    sqlite3 transaction context manager — if any statement raises, the entire
+    migration is rolled back and the marker is NOT set, so the next boot
+    retries cleanly. Without this guard a mid-loop crash could leave both
+    the legacy key and the namespaced key in the table.
     """
     marker = conn.execute(
         "SELECT value FROM config WHERE key = '_migration_multi_profile'"
@@ -390,68 +394,68 @@ def _migrate_to_multi_profile(conn):
 
     now = int(time.time() * 1000)
 
-    # 1. Create Default profile from legacy global credentials, if not present.
-    # The legacy keys in `config` use the names: lighter_wallet_address,
-    # lighter_public_key, lighter_private_key, account_address, secret_key.
-    existing = conn.execute("SELECT id FROM profiles WHERE id = 1").fetchone()
-    if existing is None:
-        cred_keys = (
-            "account_address", "secret_key",
-            "lighter_wallet_address", "lighter_public_key", "lighter_private_key",
-        )
-        creds = {}
-        for k in cred_keys:
-            row = conn.execute("SELECT value FROM config WHERE key = ?", (k,)).fetchone()
-            creds[k] = row["value"] if row else None
-        exch_row = conn.execute(
-            "SELECT value FROM config WHERE key = 'selected_exchange'"
-        ).fetchone()
-        exchange = exch_row["value"] if exch_row else "lighter"
+    with conn:  # atomic: commit on success, rollback on exception
+        # 1. Create Default profile from legacy global credentials, if not present.
+        # The legacy keys in `config` use the names: lighter_wallet_address,
+        # lighter_public_key, lighter_private_key, account_address, secret_key.
+        existing = conn.execute("SELECT id FROM profiles WHERE id = 1").fetchone()
+        if existing is None:
+            cred_keys = (
+                "account_address", "secret_key",
+                "lighter_wallet_address", "lighter_public_key", "lighter_private_key",
+            )
+            creds = {}
+            for k in cred_keys:
+                row = conn.execute("SELECT value FROM config WHERE key = ?", (k,)).fetchone()
+                creds[k] = row["value"] if row else None
+            exch_row = conn.execute(
+                "SELECT value FROM config WHERE key = 'selected_exchange'"
+            ).fetchone()
+            exchange = exch_row["value"] if exch_row else "lighter"
+            conn.execute(
+                """INSERT INTO profiles
+                   (id, name, exchange, lighter_wallet_address, lighter_public_key,
+                    lighter_private_key, hyperliquid_address, hyperliquid_secret,
+                    created_at, updated_at)
+                   VALUES (1, 'Default', ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    exchange,
+                    creds.get("lighter_wallet_address"),
+                    creds.get("lighter_public_key"),
+                    creds.get("lighter_private_key"),
+                    creds.get("account_address"),
+                    creds.get("secret_key"),
+                    now, now,
+                ),
+            )
+
+        # 2. Backfill profile_id=1 on rows inserted before the DEFAULT was wired
+        for table in ("trades", "signals", "logs"):
+            conn.execute(f"UPDATE {table} SET profile_id = 1 WHERE profile_id IS NULL")
+
+        # 3. Namespace per-profile config keys → profile.1.<key>
+        keys_to_move = []
+        for row in conn.execute("SELECT key, value FROM config").fetchall():
+            if _is_m8_profile_key(row["key"]):
+                keys_to_move.append((row["key"], row["value"]))
+        for k, v in keys_to_move:
+            conn.execute(
+                "INSERT INTO config (key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (f"profile.1.{k}", v),
+            )
+            conn.execute("DELETE FROM config WHERE key = ?", (k,))
+
+        # 4. Legacy credential keys stay in `config` for now — `is_configured()`
+        # falls back to them when a profile row is empty. A follow-up migration
+        # can drop them once every profile has its credentials on its row.
+
+        # 5. Set marker (still inside the transaction — rolled back together
+        # with everything else on failure)
         conn.execute(
-            """INSERT INTO profiles
-               (id, name, exchange, lighter_wallet_address, lighter_public_key,
-                lighter_private_key, hyperliquid_address, hyperliquid_secret,
-                created_at, updated_at)
-               VALUES (1, 'Default', ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                exchange,
-                creds.get("lighter_wallet_address"),
-                creds.get("lighter_public_key"),
-                creds.get("lighter_private_key"),
-                creds.get("account_address"),
-                creds.get("secret_key"),
-                now, now,
-            ),
+            "INSERT INTO config (key, value) VALUES ('_migration_multi_profile', 'done') "
+            "ON CONFLICT(key) DO UPDATE SET value = 'done'"
         )
-
-    # 2. Backfill profile_id=1 on rows inserted before the DEFAULT was wired
-    for table in ("trades", "signals", "logs"):
-        conn.execute(f"UPDATE {table} SET profile_id = 1 WHERE profile_id IS NULL")
-
-    # 3. Namespace per-profile config keys → profile.1.<key>
-    keys_to_move = []
-    for row in conn.execute("SELECT key, value FROM config").fetchall():
-        if _is_m8_profile_key(row["key"]):
-            keys_to_move.append((row["key"], row["value"]))
-    for k, v in keys_to_move:
-        conn.execute(
-            "INSERT INTO config (key, value) VALUES (?, ?) "
-            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            (f"profile.1.{k}", v),
-        )
-        conn.execute("DELETE FROM config WHERE key = ?", (k,))
-
-    # 4. Legacy credential keys stay in `config` for now — `is_configured()` and
-    # the current Lighter exchange client still read them as globals. Phase 4
-    # will switch those reads to the Default profile row, after which a
-    # follow-up migration can drop the keys safely.
-
-    # 5. Set marker
-    conn.execute(
-        "INSERT INTO config (key, value) VALUES ('_migration_multi_profile', 'done') "
-        "ON CONFLICT(key) DO UPDATE SET value = 'done'"
-    )
-    conn.commit()
 
 
 def _sweep_stray_profile_keys(conn):
