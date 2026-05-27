@@ -45,8 +45,12 @@ def get_asset_live_status() -> dict:
         return dict(_asset_live_status)
 
 
-def bot_loop():
-    """Main bot loop — event-driven via BinanceCandleManager WebSocket."""
+def bot_loop(profile_id: int = 1):
+    """Main bot loop — event-driven via candle manager WebSocket.
+
+    Single-profile today. Phase 4 turns this into a dict of loops keyed by
+    profile_id; the candle manager remains a singleton shared by all profiles.
+    """
     global risk_mgr, candle_mgr
 
     cfg = db.get_all_config()
@@ -54,7 +58,7 @@ def bot_loop():
     setup_logger("bot", debug=debug)
 
     log.info("=" * 50)
-    log.info("Hyperliquid Scalping Bot starting...")
+    log.info(f"Hyperliquid Scalping Bot starting (profile {profile_id})...")
     log.info("=" * 50)
 
     # Connect to exchange with retries
@@ -70,16 +74,16 @@ def bot_loop():
             log.error(f"Failed to connect (attempt {attempt+1}/{_CONNECT_MAX_RETRIES}): {e}", exc_info=True)
             if attempt == _CONNECT_MAX_RETRIES - 1:
                 log.error("All connection attempts exhausted — bot stopping")
-                db.set_config("bot_status", "error")
+                db.set_profile_config(profile_id, "bot_status", "error")
                 return
             log.warning(f"Retrying connection in {delay}s...")
             _stop_event.wait(delay)
             if _stop_event.is_set():
-                db.set_config("bot_status", "stopped")
+                db.set_profile_config(profile_id, "bot_status", "stopped")
                 return
 
-    risk_mgr = RiskManager(client)
-    db.set_config("bot_status", "running")
+    risk_mgr = RiskManager(client, profile_id=profile_id)
+    db.set_profile_config(profile_id, "bot_status", "running")
 
     cfg = db.get_all_config()
     assets_raw = cfg.get("monitored_assets", '["BTC","ETH","SOL"]')
@@ -87,7 +91,7 @@ def bot_loop():
         global_assets = json.loads(assets_raw)
     except json.JSONDecodeError:
         global_assets = ["BTC", "ETH", "SOL"]
-    initial_assets = get_active_assets(global_assets)
+    initial_assets = get_active_assets(global_assets, profile_id=profile_id)
 
     # Timestamps for 15m/30m/1h/4h/1d candle close detection.
     # Persistidos em SQLite (config table com prefix `last_ts.<tf>.<asset>`)
@@ -118,11 +122,12 @@ def bot_loop():
         try:
             current_cfg = db.get_all_config()
             process_asset(asset, current_cfg,
-                          last_15m_ts, last_30m_ts, last_1h_ts, last_4h_ts, last_1d_ts)
+                          last_15m_ts, last_30m_ts, last_1h_ts, last_4h_ts, last_1d_ts,
+                          profile_id=profile_id)
         except Exception as e:
             log.error(f"[{asset}] on_candle_close error: {e}", exc_info=True)
 
-    active_intervals = get_required_timeframes()
+    active_intervals = get_required_timeframes(profile_id=profile_id)
     log.info(f"Active strategy timeframes: {active_intervals}")
     selected_exchange = cfg.get("selected_exchange", "lighter")
     use_lighter_ws = (cfg.get("use_lighter_ws_candles", "true").lower() == "true")
@@ -146,7 +151,7 @@ def bot_loop():
     while not _stop_event.is_set():
         try:
             cfg = db.get_all_config()
-            status = cfg.get("bot_status", "running")
+            status = db.get_profile_config(profile_id, "bot_status") or "running"
 
             if status == "stopped":
                 log.info("Bot stopped via dashboard")
@@ -172,7 +177,7 @@ def bot_loop():
                 global_assets = json.loads(assets_raw)
             except json.JSONDecodeError:
                 global_assets = ["BTC", "ETH", "SOL"]
-            current_assets = get_active_assets(global_assets)
+            current_assets = get_active_assets(global_assets, profile_id=profile_id)
             if set(current_assets) != set(candle_mgr._assets):
                 log.info(f"Asset list changed -> {current_assets}")
                 candle_mgr.update_assets(current_assets)
@@ -190,7 +195,7 @@ def bot_loop():
     log.info("Bot stopped.")
 
 
-def check_bb_mid_exit(asset: str, df_5m) -> None:
+def check_bb_mid_exit(asset: str, df_5m, profile_id: int = 1) -> None:
     """
     Check open bb_reversion and bb_stoch trades for BB midline exit.
     Called on every new 5m candle close.
@@ -198,7 +203,7 @@ def check_bb_mid_exit(asset: str, df_5m) -> None:
     For SHORT: exits when candle closes <= BB midline.
     The exchange cancels TP/SL trigger orders automatically when position is closed.
     """
-    open_trades = db.get_open_trades()
+    open_trades = db.get_open_trades(profile_id=profile_id)
     bb_trades = [t for t in open_trades
                  if t["asset"] == asset and (
                      t.get("strategy", "").startswith("bb_reversion") or
@@ -221,13 +226,13 @@ def check_bb_mid_exit(asset: str, df_5m) -> None:
         if strategy_name.startswith("bb_reversion"):
             strategy = STRATEGY_MAP.get(strategy_name)
             base_params = strategy.DEFAULT_PARAMS if strategy else BBReversionStrategy.DEFAULT_PARAMS
-            cfg = db.get_strategy_config(strategy_name)
+            cfg = db.get_strategy_config(strategy_name, profile_id=profile_id)
             params = {**base_params, **cfg["params"]}
             period = int(params.get("bb_period", 10))
         else:  # bb_stoch_*
             strategy = STRATEGY_MAP.get(strategy_name)
             base_params = strategy.DEFAULT_PARAMS if strategy else BBStochStrategy.DEFAULT_PARAMS
-            cfg = db.get_strategy_config(strategy_name)
+            cfg = db.get_strategy_config(strategy_name, profile_id=profile_id)
             params = {**base_params, **cfg["params"]}
             _bme = params.get("bb_mid_exit", True)
             if str(_bme).lower() in ("false", "0", "no"):
@@ -244,7 +249,7 @@ def check_bb_mid_exit(asset: str, df_5m) -> None:
         if strategy_name.startswith("bb_reversion"):
             strategy = STRATEGY_MAP.get(strategy_name)
             base_params = strategy.DEFAULT_PARAMS if strategy else BBReversionStrategy.DEFAULT_PARAMS
-            cfg = db.get_strategy_config(strategy_name)
+            cfg = db.get_strategy_config(strategy_name, profile_id=profile_id)
             params = {**base_params, **cfg["params"]}
             _bme = params.get("bb_mid_exit", True)
             if str(_bme).lower() in ("false", "0", "no"):
@@ -272,12 +277,13 @@ def check_bb_mid_exit(asset: str, df_5m) -> None:
             )
 
         if triggered:
-            close_position(client, asset, trade["id"])
+            close_position(client, asset, trade["id"], profile_id=profile_id)
 
 
 def process_asset(asset: str, cfg: dict,
                   last_15m_ts: dict, last_30m_ts: dict,
-                  last_1h_ts: dict, last_4h_ts: dict, last_1d_ts: dict):
+                  last_1h_ts: dict, last_4h_ts: dict, last_1d_ts: dict,
+                  profile_id: int = 1):
     """Triggered on every 5m candle close by BinanceCandleManager worker thread."""
     # All timeframes fetched via exchange client (Lighter uses its own REST feed;
     # Hyperliquid delegates to Binance REST — same source as before)
@@ -331,8 +337,8 @@ def process_asset(asset: str, cfg: dict,
     new_1d  = "1d"  in active and _detect_new("1D",  "1d",  df_1d,  last_1d_ts)
 
     # Merge strategy params into effective cfg
-    mr_params = db.get_strategy_config("mean_reversion").get("params", {})
-    vr_params = db.get_strategy_config("vwap_reversion").get("params", {})
+    mr_params = db.get_strategy_config("mean_reversion", profile_id=profile_id).get("params", {})
+    vr_params = db.get_strategy_config("vwap_reversion", profile_id=profile_id).get("params", {})
     effective_cfg = {**cfg, **mr_params, **vr_params}
 
     # Compute indicators
@@ -356,7 +362,7 @@ def process_asset(asset: str, cfg: dict,
     funding_rate = client.get_funding_rate(asset)
 
     # BB mid exit check — always runs on 5m close
-    check_bb_mid_exit(asset, df_5m)
+    check_bb_mid_exit(asset, df_5m, profile_id=profile_id)
 
     # Evaluate signals
     signals = evaluate_all(
@@ -365,9 +371,11 @@ def process_asset(asset: str, cfg: dict,
         df_4h=df_4h, df_1d=df_1d, df_1h=df_1h,
         new_5m=new_5m, new_15m=new_15m, new_30m=new_30m,
         new_1h=new_1h, new_4h=new_4h, new_1d=new_1d,
+        profile_id=profile_id,
     )
 
     for signal in signals:
+        signal["profile_id"] = profile_id
         allowed, reason = risk_mgr.can_open_trade(asset)
         if not allowed:
             signal["reason"] = reason
@@ -380,43 +388,49 @@ def process_asset(asset: str, cfg: dict,
             db.insert_signal(signal)
             continue
 
-        trade_id = open_position(client, signal, size_usd, effective_cfg)
+        trade_id = open_position(client, signal, size_usd, effective_cfg, profile_id=profile_id)
         if trade_id is None:
             signal["reason"] = "Order execution failed"
             db.insert_signal(signal)
 
 
-def start_bot():
-    """Start the bot in a background thread (guards against duplicate threads)."""
+def start_bot(profile_id: int = 1):
+    """Start the bot in a background thread (guards against duplicate threads).
+
+    Single-thread today. Phase 4 turns _bot_thread / _stop_event into dicts
+    keyed by profile_id so multiple profiles can run in parallel.
+    """
     global _bot_thread
     if _bot_thread is not None and _bot_thread.is_alive():
         log.warning("Bot thread already running — ignoring duplicate start_bot() call")
         return _bot_thread
     _stop_event.clear()
-    _bot_thread = threading.Thread(target=bot_loop, daemon=True, name="bot-loop")
+    _bot_thread = threading.Thread(
+        target=bot_loop, args=(profile_id,), daemon=True, name=f"bot-loop-p{profile_id}",
+    )
     _bot_thread.start()
     return _bot_thread
 
 
-def stop_bot():
+def stop_bot(profile_id: int = 1):
     """Signal the bot to stop."""
     _stop_event.set()
-    db.set_config("bot_status", "stopped")
+    db.set_profile_config(profile_id, "bot_status", "stopped")
     log.info("Stop signal sent to bot")
 
 
-def pause_bot():
-    db.set_config("bot_status", "paused")
+def pause_bot(profile_id: int = 1):
+    db.set_profile_config(profile_id, "bot_status", "paused")
     log.info("Bot paused")
 
 
-def resume_bot():
-    db.set_config("bot_status", "running")
+def resume_bot(profile_id: int = 1):
+    db.set_profile_config(profile_id, "bot_status", "running")
     log.info("Bot resumed")
 
 
-def get_bot_status() -> str:
-    return db.get_config("bot_status") or "stopped"
+def get_bot_status(profile_id: int = 1) -> str:
+    return db.get_profile_config(profile_id, "bot_status") or "stopped"
 
 
 # Allow running standalone

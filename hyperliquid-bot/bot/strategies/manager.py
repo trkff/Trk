@@ -392,13 +392,13 @@ def _load_dynamic_strategies():
 _load_dynamic_strategies()
 
 
-def get_active_assets(global_assets: list[str]) -> list[str]:
-    """Union of assets across all enabled strategies.
+def get_active_assets(global_assets: list[str], profile_id: int = 1) -> list[str]:
+    """Union of assets across strategies enabled on this profile.
     A strategy with empty assets falls back to the global list.
     """
     result: set[str] = set()
     for s in REGISTERED_STRATEGIES:
-        scfg = db.get_strategy_config(s.NAME)
+        scfg = db.get_strategy_config(s.NAME, profile_id=profile_id)
         if not scfg["enabled"]:
             continue
         params = {**s.DEFAULT_PARAMS, **scfg["params"]}
@@ -407,13 +407,13 @@ def get_active_assets(global_assets: list[str]) -> list[str]:
     return sorted(result) if result else list(global_assets)
 
 
-def get_required_timeframes() -> list[str]:
-    """Union dos TFs requeridos pelas estratégias enabled.
+def get_required_timeframes(profile_id: int = 1) -> list[str]:
+    """Union dos TFs requeridos pelas estratégias enabled deste perfil.
     5m sempre incluído (é o trigger do WS). Para cada estratégia, lê params['timeframe']
     (com fallback para REQUIRED_TIMEFRAMES da classe)."""
     tfs: set[str] = {"5m"}
     for s in REGISTERED_STRATEGIES:
-        scfg = db.get_strategy_config(s.NAME)
+        scfg = db.get_strategy_config(s.NAME, profile_id=profile_id)
         if not scfg["enabled"]:
             continue
         params = {**s.DEFAULT_PARAMS, **scfg["params"]}
@@ -425,11 +425,11 @@ def get_required_timeframes() -> list[str]:
     return sorted(tfs)
 
 
-def get_all_strategy_metadata() -> list[dict]:
-    """Return display metadata for all registered strategies (for dashboard UI)."""
+def get_all_strategy_metadata(profile_id: int = 1) -> list[dict]:
+    """Return display metadata for all registered strategies on a profile."""
     result = []
     for s in REGISTERED_STRATEGIES:
-        scfg = db.get_strategy_config(s.NAME)
+        scfg = db.get_strategy_config(s.NAME, profile_id=profile_id)
         result.append({
             "name": s.NAME,
             "display_name": s.DISPLAY_NAME,
@@ -459,16 +459,17 @@ def evaluate_all(
     new_5m: bool = False,
     new_15m: bool = False,
     new_30m: bool = False,
+    profile_id: int = 1,
 ) -> list[dict]:
     """
-    Evaluate all enabled strategies and return their signals (at most one per strategy).
-    Strategies are independent — each can fire its own signal.
-    main.py / risk manager decides whether to execute each one.
+    Evaluate strategies enabled on this profile and return their signals
+    (at most one per strategy). Strategies are independent — each can fire
+    its own signal. main.py / risk manager decides whether to execute each one.
     """
     global_assets = json.loads(cfg.get("monitored_assets", '["BTC","ETH","SOL"]'))
     signals = []
     for strategy in REGISTERED_STRATEGIES:
-        scfg = db.get_strategy_config(strategy.NAME)
+        scfg = db.get_strategy_config(strategy.NAME, profile_id=profile_id)
         if not scfg["enabled"]:
             continue
 
