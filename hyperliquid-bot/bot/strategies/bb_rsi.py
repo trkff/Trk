@@ -72,7 +72,7 @@ class BBRSIStrategy(BaseStrategy):
     def evaluate(self, asset, indicators, funding_rate, cfg, params,
                  df_1m=None, df_5m=None, df_15m=None, df_30m=None, df_1h=None, **kwargs):
         p = self._resolve_params(asset, params)
-        tf, df = select_tf_df(p, kwargs,
+        tf, df = select_tf_df(p, kwargs, name=self.NAME, asset=asset,
                               df_5m=df_5m, df_15m=df_15m, df_30m=df_30m, df_1h=df_1h)
         if df is None:
             return None

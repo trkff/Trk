@@ -7,13 +7,16 @@ from bot import db
 SUPPORTED_TFS = ("5m", "15m", "30m", "1h")
 
 
-def select_tf_df(p: dict, kwargs: dict, *, df_5m=None, df_15m=None, df_30m=None, df_1h=None):
+def select_tf_df(p: dict, kwargs: dict, *,
+                 name: str | None = None, asset: str | None = None,
+                 df_5m=None, df_15m=None, df_30m=None, df_1h=None):
     """Helper para estratégias multi-TF.
 
     Lê `p['timeframe']` (default '5m'), confere o trigger `new_{tf}` em kwargs e
     retorna (tf, df) — o df correspondente ao TF. Se não for candle close do TF
     da estratégia (ou se o df estiver ausente), retorna (tf, None) e o evaluate
-    deve sair cedo.
+    deve sair cedo. `name` e `asset` são aceitos mas não-usados (placeholder
+    para logging futuro).
     """
     tf = p.get("timeframe", "5m")
     if tf not in SUPPORTED_TFS:
