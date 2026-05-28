@@ -519,11 +519,23 @@ def run_check(strategy: str, asset: str, days: int,
         trade_size_usd=trade_size_usd, fee_rate=fee_rate,
         profile_id=profile_id, return_signals=True,
     )
-    bt_signals = [s for s in bt_result.get("signals", [])
-                  if int(s["ts_ms"]) >= period_start_ms]
+    # Shift bt timestamps forward by tf_ms to match the live snap convention:
+    # bt uses candle-OPEN ts (Lighter `t` field is the open time); live snaps
+    # `now()` at evaluation to floor(/tf_ms)*tf_ms, which is the open time of
+    # the NEXT candle (i.e., the just-closed candle's close moment). Both
+    # represent the same event but differ by one tf_ms.
+    bt_signals = [
+        {**s, "ts_ms": int(s["ts_ms"]) + tf_ms}
+        for s in bt_result.get("signals", [])
+        if int(s["ts_ms"]) + tf_ms >= period_start_ms
+    ]
     bt_trades_raw = bt_result.get("trades", [])
-    bt_trades = [_normalize_bt_trade(t) for t in bt_trades_raw
-                 if _normalize_bt_trade(t)["entry_ts_ms"] >= period_start_ms]
+    bt_trades = []
+    for t in bt_trades_raw:
+        nt = _normalize_bt_trade(t)
+        nt["entry_ts_ms"] += tf_ms
+        if nt["entry_ts_ms"] >= period_start_ms:
+            bt_trades.append(nt)
     bt_metrics = bt_result.get("metrics", {})
 
     # 2. Live snapshot — snap timestamps to candle boundary (tf_ms) so live
