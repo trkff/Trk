@@ -1124,13 +1124,14 @@ def insert_signal(signal: dict) -> int:
     conn = get_conn()
     signal.setdefault("strategy_name", "mean_reversion")
     signal.setdefault("profile_id", 1)
+    signal.setdefault("indicators_json", None)
     cur = conn.execute("""
         INSERT INTO signals (profile_id, timestamp, asset, side, executed, reason,
                              ema9, ema21, rsi2, volume, volume_avg, atr, funding_rate,
-                             strategy_name)
+                             strategy_name, indicators_json)
         VALUES (:profile_id, :timestamp, :asset, :side, :executed, :reason,
                 :ema9, :ema21, :rsi2, :volume, :volume_avg, :atr, :funding_rate,
-                :strategy_name)
+                :strategy_name, :indicators_json)
     """, signal)
     conn.commit()
     return cur.lastrowid

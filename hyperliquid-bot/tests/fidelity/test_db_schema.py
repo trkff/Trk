@@ -116,3 +116,34 @@ def test_list_fidelity_runs_orders_by_created_desc(tmp_path, monkeypatch):
         "2026-05-27T00:00:00+00:00",
         "2026-05-26T00:00:00+00:00",
     ]
+
+
+def test_insert_signal_persists_indicators_json(tmp_path, monkeypatch):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "test.db")
+    _reset_conn()
+    db.init_db()
+    sid = db.insert_signal({
+        "timestamp": "2026-05-28T12:00:00+00:00", "asset": "BTC", "side": "long",
+        "executed": 1, "reason": None,
+        "ema9": None, "ema21": None, "rsi2": 0,
+        "volume": 1.0, "volume_avg": 1.0, "atr": 100.0, "funding_rate": 0.0,
+        "strategy_name": "bb_stoch_btc_5m",
+        "indicators_json": '{"bbp": 0.05, "stoch_k": 12.3}',
+    })
+    row = db.get_conn().execute("SELECT indicators_json FROM signals WHERE id = ?", (sid,)).fetchone()
+    assert row["indicators_json"] == '{"bbp": 0.05, "stoch_k": 12.3}'
+
+
+def test_insert_signal_backwards_compatible_without_indicators_json(tmp_path, monkeypatch):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "test.db")
+    _reset_conn()
+    db.init_db()
+    sid = db.insert_signal({
+        "timestamp": "2026-05-28T12:00:00+00:00", "asset": "BTC", "side": "long",
+        "executed": 1, "reason": None,
+        "ema9": None, "ema21": None, "rsi2": 0,
+        "volume": 1.0, "volume_avg": 1.0, "atr": 100.0, "funding_rate": 0.0,
+        "strategy_name": "bb_stoch_btc_5m",
+    })
+    row = db.get_conn().execute("SELECT indicators_json FROM signals WHERE id = ?", (sid,)).fetchone()
+    assert row["indicators_json"] is None
