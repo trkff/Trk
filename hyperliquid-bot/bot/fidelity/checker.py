@@ -333,3 +333,206 @@ def diff_metrics(live_metrics: dict, bt_metrics: dict,
                 "notes": None,
             })
     return out
+
+
+# ── Orchestrator ──────────────────────────────────────────────────────────
+
+_TF_TO_MS = {"5m": 300_000, "15m": 900_000, "30m": 1_800_000, "1h": 3_600_000}
+
+
+def _load_live_signals(strategy: str, asset: str, profile_id: int,
+                       start_ms: int, end_ms: int) -> list[dict]:
+    """Read live signals for the period and normalize to {ts_ms, side,
+    signal_price, indicators_json, reason, executed}."""
+    from datetime import datetime
+    from bot import db as bot_db
+
+    rows = bot_db.get_conn().execute(
+        """
+        SELECT id, timestamp, side, executed, reason, strategy_name,
+               indicators_json
+        FROM signals
+        WHERE strategy_name = ? AND asset = ? AND profile_id = ?
+        ORDER BY timestamp ASC
+        """,
+        (strategy, asset, profile_id),
+    ).fetchall()
+
+    out: list[dict] = []
+    for r in rows:
+        try:
+            ts_ms = int(datetime.fromisoformat(r["timestamp"]).timestamp() * 1000)
+        except Exception:
+            continue
+        if ts_ms < start_ms or ts_ms > end_ms:
+            continue
+        signal_price = None
+        if r["indicators_json"]:
+            try:
+                ind = json.loads(r["indicators_json"])
+                signal_price = ind.get("close")
+            except (json.JSONDecodeError, TypeError):
+                pass
+        out.append({
+            "ts_ms": ts_ms,
+            "side": r["side"],
+            "signal_price": signal_price,
+            "indicators_json": r["indicators_json"],
+            "reason": r["reason"],
+            "executed": r["executed"],
+        })
+    return out
+
+
+def _load_live_trades(strategy: str, asset: str, profile_id: int,
+                      start_ms: int, end_ms: int) -> list[dict]:
+    from datetime import datetime
+    from bot import db as bot_db
+
+    rows = bot_db.get_conn().execute(
+        """
+        SELECT id, entry_time, exit_time, side, entry_price, exit_price,
+               pnl, signal_price, status
+        FROM trades
+        WHERE strategy = ? AND asset = ? AND profile_id = ? AND status = 'closed'
+        ORDER BY entry_time ASC
+        """,
+        (strategy, asset, profile_id),
+    ).fetchall()
+
+    out: list[dict] = []
+    for r in rows:
+        try:
+            entry_ts_ms = int(datetime.fromisoformat(r["entry_time"]).timestamp() * 1000)
+        except Exception:
+            continue
+        if entry_ts_ms < start_ms or entry_ts_ms > end_ms:
+            continue
+        out.append({
+            "entry_ts_ms": entry_ts_ms,
+            "side": r["side"],
+            "entry_price": float(r["entry_price"]),
+            "exit_price": float(r["exit_price"] or 0),
+            "pnl": float(r["pnl"] or 0),
+            "exit_type": None,    # Not currently persisted on live trades
+            "signal_price": float(r["signal_price"] or 0),
+        })
+    return out
+
+
+def _normalize_bt_trade(t: dict) -> dict:
+    """Convert engine trade dict (entry_time ISO) to entry_ts_ms-keyed dict."""
+    from datetime import datetime
+    return {
+        "entry_ts_ms": int(datetime.fromisoformat(t["entry_time"]).timestamp() * 1000),
+        "side": t["side"],
+        "entry_price": float(t["entry_price"]),
+        "exit_price": float(t.get("exit_price") or 0),
+        "exit_type": t.get("outcome"),    # "tp" / "sl" / "bb_mid"
+        "duration_candles": int(t.get("candles_held", 0)),
+    }
+
+
+def run_check(strategy: str, asset: str, days: int,
+              profile_id: int = 1, trade_size_usd: float = 1000.0,
+              fee_rate: float = 0.0) -> int:
+    """Run a full 3-layer fidelity check and persist results.
+
+    Returns the run_id of the persisted row.
+    """
+    import time
+    from datetime import datetime, timezone
+    from bot.backtest import engine as bt_engine
+    from bot.backtest.report import compute_metrics
+    from bot import db as bot_db
+    from bot.strategies.manager import STRATEGY_MAP
+
+    resolved = bt_engine._resolve_strategy_instance(strategy, asset)
+    strat_obj = STRATEGY_MAP[resolved]
+    params_db = bot_db.get_strategy_config(resolved, profile_id=profile_id)["params"]
+    params_full = {**strat_obj.DEFAULT_PARAMS, **params_db}
+    tf = str(params_full.get("timeframe", "5m"))
+    tf_ms = _TF_TO_MS.get(tf, 300_000)
+
+    now_ms = int(time.time() * 1000)
+    period_end_ms = now_ms - tf_ms                      # clamp to last closed candle
+    period_start_ms = period_end_ms - days * 86_400_000
+
+    # 1. Backtest with signals
+    bt_result = bt_engine._run_backtest(
+        resolved, asset, days,
+        trade_size_usd=trade_size_usd, fee_rate=fee_rate,
+        profile_id=profile_id, return_signals=True,
+    )
+    bt_signals = bt_result.get("signals", [])
+    bt_trades_raw = bt_result.get("trades", [])
+    bt_trades = [_normalize_bt_trade(t) for t in bt_trades_raw]
+    bt_metrics = bt_result.get("metrics", {})
+
+    # 2. Live snapshot
+    live_signals = _load_live_signals(resolved, asset, profile_id,
+                                      period_start_ms, period_end_ms)
+    live_trades_raw = _load_live_trades(resolved, asset, profile_id,
+                                        period_start_ms, period_end_ms)
+    live_metrics = compute_metrics(live_trades_raw, initial_capital=trade_size_usd)
+
+    # 3. Tolerances from config (with defaults)
+    try:
+        price_tol = float(bot_db.get_config("fidelity.price_tol_pct") or PRICE_TOL)
+    except (TypeError, ValueError):
+        price_tol = PRICE_TOL
+    try:
+        ind_tol = float(bot_db.get_config("fidelity.indicator_tol_pct") or IND_TOL)
+    except (TypeError, ValueError):
+        ind_tol = IND_TOL
+
+    sig_diff = diff_signals(live_signals, bt_signals,
+                            price_tol=price_tol, ind_tol=ind_tol)
+    trade_diff = diff_trades(live_trades_raw, bt_trades, tf_ms=tf_ms,
+                             price_tol=price_tol)
+    metric_diff = diff_metrics(live_metrics, bt_metrics)
+
+    # 4. Score
+    outcomes_total = trade_diff["matched"] + trade_diff["exit_type_mismatch"]
+    outcome_rate = (trade_diff["matched"] / outcomes_total) if outcomes_total > 0 else 1.0
+    counts = {
+        "live_signals": len(live_signals),
+        "bt_signals":   len(bt_signals),
+        "matched":      sig_diff["matched"],
+        "price_drift":  sig_diff["price_drift"],
+        "indicator_drift": sig_diff["indicator_drift"],
+    }
+    score = fidelity_score(signal_counts=counts, trade_outcome_match_rate=outcome_rate)
+
+    # 5. Persist run header
+    run_id = bot_db.insert_fidelity_run({
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "profile_id": profile_id,
+        "strategy": resolved, "asset": asset.upper(), "timeframe": tf,
+        "period_start_ms": period_start_ms, "period_end_ms": period_end_ms,
+        "params_json": json.dumps(params_full, default=str),
+        "live_signals": len(live_signals),
+        "bt_signals":   len(bt_signals),
+        "matched":      sig_diff["matched"],
+        "phantom":      sig_diff["phantom"],
+        "missed":       sig_diff["missed"],
+        "side_mismatch": sig_diff["side_mismatch"],
+        "price_drift":   sig_diff["price_drift"],
+        "indicator_drift": sig_diff["indicator_drift"],
+        "fidelity_score": score,
+        "live_metrics_json": json.dumps(live_metrics, default=str),
+        "bt_metrics_json":   json.dumps(bt_metrics, default=str),
+    })
+
+    # 6. Persist diffs with attributed cause
+    all_diffs = sig_diff["diffs"] + trade_diff["diffs"] + metric_diff["diffs"]
+    live_by_ts = {s["ts_ms"]: s for s in live_signals}
+    enriched: list[dict] = []
+    for d in all_diffs:
+        siblings = [x for x in all_diffs
+                    if x is not d and x.get("ts_ms") == d.get("ts_ms")]
+        cause = attribute_cause(d, siblings, live_by_ts.get(d.get("ts_ms")))
+        enriched.append({**d, "run_id": run_id, "notes": d.get("notes") or cause})
+    bot_db.insert_fidelity_diffs_bulk(enriched)
+
+    return run_id
