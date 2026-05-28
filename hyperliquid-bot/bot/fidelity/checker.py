@@ -239,3 +239,97 @@ def diff_trades(live_trades: list[dict], bt_trades: list[dict],
         })
 
     return out
+
+
+def fidelity_score(*, signal_counts: dict, trade_outcome_match_rate: float) -> float:
+    """Composite 0..1 score combining match rate, price drift, indicator drift,
+    and trade outcome match (see spec section 5)."""
+    total_signals = max(signal_counts["live_signals"], signal_counts["bt_signals"], 1)
+    matched = signal_counts["matched"]
+    matched_div = max(matched, 1)
+
+    match_score = matched / total_signals
+    price_score = 1 - (signal_counts["price_drift"] / matched_div)
+    ind_score = 1 - (signal_counts["indicator_drift"] / matched_div)
+    trade_score = max(0.0, min(1.0, trade_outcome_match_rate))
+
+    return round(
+        0.50 * max(0.0, match_score)
+        + 0.20 * max(0.0, price_score)
+        + 0.15 * max(0.0, ind_score)
+        + 0.15 * trade_score,
+        4,
+    )
+
+
+def attribute_cause(diff: dict, siblings: list[dict],
+                    live_signal: dict | None = None) -> str:
+    """Return a short Portuguese sentence with the probable cause of the diff.
+
+    Heuristics per spec section 6.4.
+    """
+    t = diff["diff_type"]
+    ts = diff.get("ts_ms")
+
+    if t == "price":
+        return "Vela aberta vazando para o close (verificar _drop_open_candle)."
+
+    if t == "phantom":
+        near = [s for s in siblings if s.get("ts_ms") == ts and s["diff_type"] == "indicator"]
+        if near:
+            keys = ", ".join(sorted({(s.get("notes") or "").split("=")[-1] for s in near}))
+            return f"Indicador divergente no mesmo candle ({keys})."
+        return "Live disparou antes do close real (timing)."
+
+    if t == "missed":
+        reason = (live_signal or {}).get("reason")
+        if reason:
+            return f"Filtro de risco bloqueou no live: {reason}."
+        return "Candle não chegou no live (WS gap ou REST atrasado)."
+
+    if t == "indicator":
+        ind = (diff.get("notes") or "indicator=?").split("=")[-1]
+        return f"Indicador {ind} fora da tolerância — possível warmup ou fórmula diferente."
+
+    if t == "exit_type":
+        return ("Prioridade per-candle do engine (SL>TP>bb_mid) divergiu da ordem real "
+                "de trigger na exchange.")
+
+    if t == "side":
+        return "Estratégia disparou direção oposta — verificar params no DB vs. usados ao vivo."
+
+    if t == "missed_trade":
+        return ("Backtest abriu trade que o live não abriu — provável bloqueio por filtro "
+                "de risco ou max_positions.")
+
+    if t == "extra_live":
+        return "Live abriu trade que o backtest não abriu — possível sinal espúrio."
+
+    return "Causa não classificada."
+
+
+def diff_metrics(live_metrics: dict, bt_metrics: dict,
+                 abs_tol: float = 0.05) -> dict:
+    """Compare aggregate metrics; flag fields differing by > abs_tol (absolute,
+    on the metric's natural scale). Returns {"diffs": [...]} only — caller
+    decides whether to persist."""
+    out: dict = {"diffs": []}
+    for k in ("win_rate", "profit_factor", "roi", "total_pnl", "max_drawdown",
+              "trades_per_day"):
+        if k not in live_metrics or k not in bt_metrics:
+            continue
+        try:
+            lv = float(live_metrics[k] or 0)
+            bv = float(bt_metrics[k] or 0)
+        except (TypeError, ValueError):
+            continue
+        if abs(lv - bv) > abs_tol:
+            out["diffs"].append({
+                "layer": "metric", "diff_type": k,
+                "ts_ms": None, "side": None,
+                "live_json": json.dumps({k: lv}),
+                "bt_json": json.dumps({k: bv}),
+                "delta_pct": abs(lv - bv),
+                "notes": None,
+            })
+    return out
