@@ -101,6 +101,46 @@ def init_db():
     CREATE INDEX IF NOT EXISTS idx_signals_timestamp ON signals(timestamp);
     CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON logs(timestamp);
     CREATE INDEX IF NOT EXISTS idx_logs_level ON logs(level);
+
+    CREATE TABLE IF NOT EXISTS fidelity_runs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        created_at TEXT NOT NULL,
+        profile_id INTEGER NOT NULL,
+        strategy TEXT NOT NULL,
+        asset TEXT NOT NULL,
+        timeframe TEXT NOT NULL,
+        period_start_ms INTEGER NOT NULL,
+        period_end_ms INTEGER NOT NULL,
+        params_json TEXT,
+        live_signals INTEGER DEFAULT 0,
+        bt_signals INTEGER DEFAULT 0,
+        matched INTEGER DEFAULT 0,
+        phantom INTEGER DEFAULT 0,
+        missed INTEGER DEFAULT 0,
+        side_mismatch INTEGER DEFAULT 0,
+        price_drift INTEGER DEFAULT 0,
+        indicator_drift INTEGER DEFAULT 0,
+        fidelity_score REAL,
+        live_metrics_json TEXT,
+        bt_metrics_json TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS fidelity_diffs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id INTEGER NOT NULL,
+        ts_ms INTEGER,
+        layer TEXT NOT NULL,
+        diff_type TEXT NOT NULL,
+        side TEXT,
+        live_json TEXT,
+        bt_json TEXT,
+        delta_pct REAL,
+        notes TEXT,
+        FOREIGN KEY (run_id) REFERENCES fidelity_runs(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_fidelity_runs_strategy_created ON fidelity_runs(strategy, created_at);
+    CREATE INDEX IF NOT EXISTS idx_fidelity_diffs_run_layer_type ON fidelity_diffs(run_id, layer, diff_type);
     """)
     conn.commit()
     migrate_db()
