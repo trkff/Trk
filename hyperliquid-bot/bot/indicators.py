@@ -32,16 +32,6 @@ def calc_volume_avg(df: pd.DataFrame, period: int) -> pd.Series:
     return ta.sma(df["volume"], length=period)
 
 
-def is_fee_viable(atr: float, price: float, tp_multiplier: float, fee_rate: float = 0.0009) -> bool:
-    """Return True only if expected TP profit exceeds round-trip fee cost.
-
-    Default fee_rate=0.0009 = taker 0.045% × 2 sides (round trip).
-    """
-    if price <= 0.0:
-        return False
-    return (atr / price) * tp_multiplier > fee_rate
-
-
 def compute_all(df_1m: pd.DataFrame, df_5m: pd.DataFrame, cfg: dict) -> dict | None:
     """
     Compute all indicators from the latest candle data.
@@ -157,7 +147,7 @@ def compute_all(df_1m: pd.DataFrame, df_5m: pd.DataFrame, cfg: dict) -> dict | N
     except Exception as e:
         log.debug(f"StochRSI 5m computation failed: {e}")
 
-    # 5m indicators — used by mean_reversion (5m timeframe)
+    # 5m indicators (used by várias estratégias 5m)
     rsi2_5m_series = calc_rsi(df_5m, rsi_period)
     atr_5m_series = calc_atr(df_5m, atr_period)
     vol_avg_5m_series = calc_volume_avg(df_5m, vol_period)
@@ -176,7 +166,7 @@ def compute_all(df_1m: pd.DataFrame, df_5m: pd.DataFrame, cfg: dict) -> dict | N
         "volume_avg": round(float(vol_avg_val), 4),
         "close_1m": round(float(df_1m["close"].iloc[-1]), 4),
         "close_5m": round(float(df_5m["close"].iloc[-1]), 4),
-        # 5m scalp indicators (mean_reversion uses these)
+        # 5m scalp indicators
         "rsi2_5m": round(float(rsi2_5m_val), 2) if rsi2_5m_val is not None else None,
         "atr_5m": round(float(atr_5m_val), 4) if atr_5m_val is not None else None,
         "volume_5m": round(vol_5m_current, 4),
@@ -187,7 +177,7 @@ def compute_all(df_1m: pd.DataFrame, df_5m: pd.DataFrame, cfg: dict) -> dict | N
         "stochrsi_d": stochrsi_d_val,
         "stochrsi_k_prev": stochrsi_k_prev,
         "stochrsi_d_prev": stochrsi_d_prev,
-        # Optional 5m (vwap_reversion usa estes)
+        # Optional 5m
         "vwap_5m": vwap_5m_val,
         "stochrsi_k_5m": stochrsi_k_5m_val,
         "stochrsi_d_5m": stochrsi_d_5m_val,

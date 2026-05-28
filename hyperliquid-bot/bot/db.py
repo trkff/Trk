@@ -627,18 +627,6 @@ DEFAULT_CONFIG = {
     "debug_logging": "false",
     "bot_status": "stopped",
     "slippage": "0.005",
-    "strategy.mean_reversion.enabled": "true",
-    "strategy.mean_reversion.params": '{"ema_fast": 9, "ema_slow": 21, "rsi_period": 2, "atr_period": 14, "volume_avg_period": 20, "rsi_oversold": 15, "rsi_overbought": 85, "funding_rate_limit": 0.0005, "volume_multiplier": 1.3, "tp_atr_multiplier": 1.5, "sl_atr_multiplier": 1.0}',
-    "strategy.funding_arb.enabled": "false",
-    "strategy.funding_arb.params": '{"funding_long_threshold": 0.001, "funding_short_threshold": 0.001, "min_volume_mult": 1.2}',
-    "strategy.order_flow.enabled": "false",
-    "strategy.order_flow.params": '{"delta_threshold": 0.62, "lookback_periods": 3, "min_volume_mult": 1.5, "funding_limit": 0.001}',
-    "strategy.triple_ema_1h.enabled": "false",
-    "strategy.triple_ema_1h.params": '{"pullback_threshold": 0.003, "vol_multiplier": 1.2, "tp_atr_multiplier": 2.0, "funding_rate_limit": 0.0005}',
-    "strategy.momentum_macd_1h.enabled": "false",
-    "strategy.momentum_macd_1h.params": '{"vol_multiplier": 1.2, "tp_atr_multiplier": 3.0, "sl_atr_multiplier": 1.5, "funding_rate_limit": 0.0005}',
-    "strategy.ema200_rsi_1h.enabled": "false",
-    "strategy.ema200_rsi_1h.params": '{"rsi_period": 14, "vol_multiplier": 1.2, "tp_atr_multiplier": 2.5, "funding_rate_limit": 0.0005}',
 }
 
 

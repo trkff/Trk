@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 from datetime import datetime, timezone, timedelta
-from bot.indicators import compute_all, is_fee_viable
+from bot.indicators import compute_all
 
 
 def _make_df_1m(n=60, base_price=100.0, base_ts=None):
@@ -80,37 +80,6 @@ def test_compute_all_insufficient_candles_returns_none():
     """Poucos candles → indicadores obrigatórios NaN → retorna None."""
     result = compute_all(_make_df_1m(5), _make_df_5m(5), CFG)
     assert result is None
-
-
-def test_is_fee_viable_blocked_spec_example():
-    # BTC: ATR=$20, price=$66747, tp=2 → (20/66747)*2 = 0.000599 < 0.0009
-    assert is_fee_viable(20.0, 66747.0, 2.0, 0.0009) is False
-
-
-def test_is_fee_viable_allowed_spec_example():
-    # BTC: ATR=$35, price=$66747, tp=2 → (35/66747)*2 = 0.001049 > 0.0009
-    assert is_fee_viable(35.0, 66747.0, 2.0, 0.0009) is True
-
-
-def test_is_fee_viable_default_fee_rate():
-    # default fee_rate=0.0009 should match explicit
-    assert is_fee_viable(20.0, 66747.0, 2.0) is False
-    assert is_fee_viable(35.0, 66747.0, 2.0) is True
-
-
-def test_is_fee_viable_exact_boundary():
-    # (atr/price)*tp == fee_rate → not strictly greater → False
-    # atr=30, price=100000, tp=3 → (30/100000)*3 = 0.0009 → not > 0.0009
-    assert is_fee_viable(30.0, 100000.0, 3.0, 0.0009) is False
-
-
-def test_is_fee_viable_just_above_boundary():
-    # atr=30.01 → (30.01/100000)*3 = 0.0009003 > 0.0009 → True
-    assert is_fee_viable(30.01, 100000.0, 3.0, 0.0009) is True
-
-
-def test_is_fee_viable_zero_price_returns_false():
-    assert is_fee_viable(20.0, 0.0, 2.0, 0.0009) is False
 
 
 # ── 5m indicator keys ─────────────────────────────────────────────────────────

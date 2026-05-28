@@ -626,19 +626,18 @@ def process_asset(asset: str, cfg: dict,
     new_4h  = "4h"  in active and _detect_new("4H",  "4h",  df_4h,  last_4h_ts)
     new_1d  = "1d"  in active and _detect_new("1D",  "1d",  df_1d,  last_1d_ts)
 
-    # Merge strategy params into effective cfg
-    mr_params = db.get_strategy_config("mean_reversion", profile_id=profile_id).get("params", {})
-    vr_params = db.get_strategy_config("vwap_reversion", profile_id=profile_id).get("params", {})
-    effective_cfg = {**cfg, **mr_params, **vr_params}
-
-    # Compute indicators
-    indicators = compute_all(df_1m, df_5m, effective_cfg)
+    # Compute indicators (cfg holds period defaults; estratégias modernas
+    # passam seus próprios params no params dict do evaluate())
+    indicators = compute_all(df_1m, df_5m, cfg)
     if indicators is None:
         return
+    effective_cfg = cfg
 
-    # Update live fee viability status for dashboard
+    # Update live fee viability status for dashboard (card "Ativos
+    # Monitorados" no Overview). Usa ATR 1m + tp_atr_multiplier default
+    # cfg-level — só pra display de "ATR cobre fee?". Não bloqueia trade.
     fee_rate = float(cfg.get("fee_rate_round_trip") or 0.0009)
-    tp_mult = float(mr_params.get("tp_atr_multiplier", 1.5))
+    tp_mult = float(cfg.get("tp_atr_multiplier", 1.5))
     atr = indicators["atr"]
     price = indicators["close_1m"]
     atr_pct = atr / price

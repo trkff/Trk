@@ -1,8 +1,5 @@
 from abc import ABC, abstractmethod
 
-from bot.logger import get_logger
-from bot import db
-
 
 SUPPORTED_TFS = ("5m", "15m", "30m", "1h")
 
@@ -55,16 +52,6 @@ class BaseStrategy(ABC):
                 continue
             clean[k] = round(fv, 6)
         return json.dumps(clean)
-
-    def _insert_fee_block_signal(self, base, asset, indicators, tp_mult, fee_rate, side):
-        atr_pct = indicators["atr"] / indicators["close_1m"]
-        reason = (
-            f"ATR insuficiente para cobrir fees "
-            f"(atr_pct={atr_pct:.4%}, necessário={fee_rate / tp_mult:.4%})"
-        )
-        log = get_logger(f"strategies.{self.NAME}")
-        log.debug(f"[{asset}] {reason}")
-        db.insert_signal({**base, "side": side, "reason": reason})
 
     @abstractmethod
     def evaluate(
