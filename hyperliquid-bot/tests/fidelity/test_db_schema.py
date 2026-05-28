@@ -56,3 +56,63 @@ def test_m10_creates_indexes(tmp_path, monkeypatch):
     ).fetchall()]
     assert "idx_fidelity_runs_strategy_created" in idx
     assert "idx_fidelity_diffs_run_layer_type" in idx
+
+
+def test_insert_fidelity_run_returns_id(tmp_path, monkeypatch):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "test.db")
+    _reset_conn()
+    db.init_db()
+    rid = db.insert_fidelity_run({
+        "created_at": "2026-05-28T12:00:00+00:00",
+        "profile_id": 1,
+        "strategy": "bb_stoch_btc_5m",
+        "asset": "BTC",
+        "timeframe": "5m",
+        "period_start_ms": 1_700_000_000_000,
+        "period_end_ms": 1_700_086_400_000,
+        "params_json": "{}",
+        "live_signals": 10, "bt_signals": 10, "matched": 9,
+        "phantom": 0, "missed": 1, "side_mismatch": 0,
+        "price_drift": 0, "indicator_drift": 0,
+        "fidelity_score": 0.95,
+        "live_metrics_json": "{}", "bt_metrics_json": "{}",
+    })
+    assert isinstance(rid, int) and rid > 0
+
+
+def test_insert_fidelity_diff_links_to_run(tmp_path, monkeypatch):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "test.db")
+    _reset_conn()
+    db.init_db()
+    rid = db.insert_fidelity_run({
+        "created_at": "2026-05-28T12:00:00+00:00", "profile_id": 1,
+        "strategy": "bb_stoch_btc_5m", "asset": "BTC", "timeframe": "5m",
+        "period_start_ms": 0, "period_end_ms": 1,
+    })
+    did = db.insert_fidelity_diff({
+        "run_id": rid, "ts_ms": 1_700_000_000_000,
+        "layer": "signal", "diff_type": "missed", "side": "long",
+        "live_json": None, "bt_json": '{"signal_price": 50000}',
+        "delta_pct": None, "notes": "WS gap",
+    })
+    assert isinstance(did, int) and did > 0
+    rows = db.get_fidelity_diffs(rid)
+    assert len(rows) == 1 and rows[0]["diff_type"] == "missed"
+
+
+def test_list_fidelity_runs_orders_by_created_desc(tmp_path, monkeypatch):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "test.db")
+    _reset_conn()
+    db.init_db()
+    for ts in ("2026-05-26T00:00:00+00:00", "2026-05-28T00:00:00+00:00", "2026-05-27T00:00:00+00:00"):
+        db.insert_fidelity_run({
+            "created_at": ts, "profile_id": 1,
+            "strategy": "x", "asset": "BTC", "timeframe": "5m",
+            "period_start_ms": 0, "period_end_ms": 1,
+        })
+    runs = db.list_fidelity_runs(limit=10)
+    assert [r["created_at"] for r in runs] == [
+        "2026-05-28T00:00:00+00:00",
+        "2026-05-27T00:00:00+00:00",
+        "2026-05-26T00:00:00+00:00",
+    ]

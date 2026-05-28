@@ -1247,3 +1247,88 @@ def get_pnl_distribution(profile_id: int | None = None) -> list[float]:
             (profile_id,),
         ).fetchall()
     return [r["pnl"] for r in rows]
+
+
+# ── Fidelity helpers ────────────────────────────────────────────────
+
+_FIDELITY_RUN_COLS = (
+    "created_at", "profile_id", "strategy", "asset", "timeframe",
+    "period_start_ms", "period_end_ms", "params_json",
+    "live_signals", "bt_signals", "matched",
+    "phantom", "missed", "side_mismatch", "price_drift", "indicator_drift",
+    "fidelity_score", "live_metrics_json", "bt_metrics_json",
+)
+
+
+def insert_fidelity_run(run: dict) -> int:
+    cols = [c for c in _FIDELITY_RUN_COLS if c in run]
+    placeholders = ",".join(f":{c}" for c in cols)
+    conn = get_conn()
+    cur = conn.execute(
+        f"INSERT INTO fidelity_runs ({','.join(cols)}) VALUES ({placeholders})",
+        run,
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def insert_fidelity_diff(diff: dict) -> int:
+    conn = get_conn()
+    cur = conn.execute(
+        """
+        INSERT INTO fidelity_diffs
+            (run_id, ts_ms, layer, diff_type, side, live_json, bt_json, delta_pct, notes)
+        VALUES
+            (:run_id, :ts_ms, :layer, :diff_type, :side, :live_json, :bt_json, :delta_pct, :notes)
+        """,
+        diff,
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def insert_fidelity_diffs_bulk(diffs: list[dict]) -> int:
+    if not diffs:
+        return 0
+    conn = get_conn()
+    conn.executemany(
+        """
+        INSERT INTO fidelity_diffs
+            (run_id, ts_ms, layer, diff_type, side, live_json, bt_json, delta_pct, notes)
+        VALUES
+            (:run_id, :ts_ms, :layer, :diff_type, :side, :live_json, :bt_json, :delta_pct, :notes)
+        """,
+        diffs,
+    )
+    conn.commit()
+    return len(diffs)
+
+
+def list_fidelity_runs(limit: int = 20, profile_id: int | None = None) -> list[dict]:
+    q = "SELECT * FROM fidelity_runs"
+    params: list = []
+    if profile_id is not None:
+        q += " WHERE profile_id = ?"
+        params.append(profile_id)
+    q += " ORDER BY created_at DESC, id DESC LIMIT ?"
+    params.append(limit)
+    return [dict(r) for r in get_conn().execute(q, params).fetchall()]
+
+
+def get_fidelity_run(run_id: int) -> dict | None:
+    row = get_conn().execute("SELECT * FROM fidelity_runs WHERE id = ?", (run_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def get_fidelity_diffs(run_id: int, layer: str | None = None,
+                      diff_type: str | None = None) -> list[dict]:
+    q = "SELECT * FROM fidelity_diffs WHERE run_id = ?"
+    params: list = [run_id]
+    if layer:
+        q += " AND layer = ?"
+        params.append(layer)
+    if diff_type:
+        q += " AND diff_type = ?"
+        params.append(diff_type)
+    q += " ORDER BY ts_ms ASC, id ASC"
+    return [dict(r) for r in get_conn().execute(q, params).fetchall()]
