@@ -57,7 +57,7 @@ def create_app():
     def check_configured():
         # API calls always pass through — only redirect HTML page requests
         if request.endpoint and not request.endpoint.startswith("api_") and request.endpoint not in (
-            "config_page", "static", "backtest_page", "scanner_page", "scanner_v2_page", "strategies_page", "ativos_page", "analise_page",
+            "config_page", "static", "backtest_page", "scanner_page", "scanner_v2_page", "strategies_page", "ativos_page", "analise_page", "fidelity_page",
         ):
             if not db.is_configured():
                 return redirect(url_for("config_page"))
@@ -105,6 +105,92 @@ def create_app():
     @app.route("/analise")
     def analise_page():
         return render_template("analise.html", page="analise")
+
+    @app.route("/fidelity")
+    def fidelity_page():
+        return render_template("fidelity.html", page="fidelity")
+
+    # ── Fidelity API endpoints ──────────────────────────────────────
+
+    @app.route("/api/fidelity/strategies")
+    def api_fidelity_strategies():
+        """List strategy instances with at least 1 closed trade for the active profile."""
+        from bot.strategies.manager import STRATEGY_MAP
+        rows = db.get_conn().execute(
+            """
+            SELECT strategy, COUNT(*) as n FROM trades
+            WHERE profile_id = ? AND status = 'closed'
+            GROUP BY strategy ORDER BY strategy
+            """,
+            (g.profile_id,),
+        ).fetchall()
+        out = []
+        for r in rows:
+            name = r["strategy"]
+            if name not in STRATEGY_MAP:
+                continue
+            strat = STRATEGY_MAP[name]
+            assets = strat.DEFAULT_PARAMS.get("assets") or []
+            out.append({
+                "name": name,
+                "display": strat.DISPLAY_NAME or name,
+                "asset": assets[0] if assets else None,
+                "timeframe": strat.DEFAULT_PARAMS.get("timeframe", "5m"),
+                "trades": r["n"],
+            })
+        return jsonify({"strategies": out})
+
+    @app.route("/api/fidelity/run", methods=["POST"])
+    def api_fidelity_run():
+        from bot.fidelity.checker import run_check
+        from bot.fidelity.job import start_check_job
+        from bot.strategies.manager import STRATEGY_MAP
+        data = request.get_json() or {}
+        strategy = data.get("strategy")
+        if not strategy:
+            return jsonify({"error": "strategy required"}), 400
+        if strategy not in STRATEGY_MAP:
+            return jsonify({"error": "unknown strategy"}), 404
+        days = int(data.get("days", 7))
+        assets = STRATEGY_MAP[strategy].DEFAULT_PARAMS.get("assets") or []
+        if not assets:
+            return jsonify({"error": "strategy has no asset configured"}), 400
+        asset = assets[0]
+        profile_id = g.profile_id
+        jid = start_check_job(
+            lambda: run_check(strategy=strategy, asset=asset, days=days,
+                              profile_id=profile_id),
+            description=f"{strategy} {days}d",
+        )
+        return jsonify({"job_id": jid})
+
+    @app.route("/api/fidelity/status/<job_id>")
+    def api_fidelity_status(job_id):
+        from bot.fidelity.job import get_job
+        rec = get_job(job_id)
+        if not rec:
+            return jsonify({"error": "job not found"}), 404
+        return jsonify(rec)
+
+    @app.route("/api/fidelity/runs")
+    def api_fidelity_runs():
+        limit = int(request.args.get("limit", 20))
+        runs = db.list_fidelity_runs(limit=limit, profile_id=g.profile_id)
+        return jsonify({"runs": runs})
+
+    @app.route("/api/fidelity/runs/<int:run_id>")
+    def api_fidelity_run_detail(run_id):
+        row = db.get_fidelity_run(run_id)
+        if not row:
+            return jsonify({"error": "not found"}), 404
+        return jsonify(row)
+
+    @app.route("/api/fidelity/runs/<int:run_id>/diffs")
+    def api_fidelity_run_diffs(run_id):
+        layer = request.args.get("layer")
+        diff_type = request.args.get("type")
+        diffs = db.get_fidelity_diffs(run_id, layer=layer, diff_type=diff_type)
+        return jsonify({"diffs": diffs})
 
     # ── API endpoints ───────────────────────────────────────────────
 
