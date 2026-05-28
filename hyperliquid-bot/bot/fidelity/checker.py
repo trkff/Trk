@@ -550,6 +550,29 @@ def run_check(strategy: str, asset: str, days: int,
             bt_trades.append(nt)
     bt_metrics = bt_result.get("metrics", {})
 
+    # Drop bt_signals that fall INSIDE an already-active bt trade (entry
+    # exclusivo, exit inclusivo). O engine retorna toda candle com
+    # sig_long[i]/sig_short[i] True via return_signals=True — mas o
+    # `_simulate_fast` pula essas durante outro trade aberto (`i = j_abs + 1`).
+    # Live também pula (`Already have open position`). Sem esse filtro, esses
+    # candles aparecem como `missed` no diff.
+    bt_busy: list[tuple[int, int]] = []
+    for t in bt_trades:
+        start = int(t["entry_ts_ms"])
+        end = start + int(t.get("duration_candles") or 0) * tf_ms
+        bt_busy.append((start, end))
+    bt_busy.sort()
+
+    def _inside_busy(ts: int) -> bool:
+        for s, e in bt_busy:
+            if s < ts <= e:
+                return True
+            if s > ts:
+                break
+        return False
+
+    bt_signals = [s for s in bt_signals if not _inside_busy(int(s["ts_ms"]))]
+
     # 2. Live snapshot — snap timestamps to candle boundary (tf_ms) so live
     # signals stamped with datetime.now() align with backtest's candle-close ts
     live_signals = _load_live_signals(resolved, asset, profile_id,
