@@ -282,7 +282,7 @@ def _resolve_strategy_instance(strategy_name: str, asset: str) -> str:
 
 
 def _run_backtest(strategy_name, asset, days, trade_size_usd, fee_rate, progress_cb=None,
-                  profile_id: int = 1):
+                  profile_id: int = 1, return_signals: bool = False):
     from bot import db as bot_db
     from bot.strategies.manager import STRATEGY_MAP
 
@@ -364,11 +364,43 @@ def _run_backtest(strategy_name, asset, days, trade_size_usd, fee_rate, progress
     trades_with_pnl = _add_pnl(filtered, trade_size_usd, fee_rate)
     metrics = compute_metrics(trades_with_pnl, initial_capital=trade_size_usd)
 
-    return {
+    result: dict = {
         "trades": trades_with_pnl,
         "metrics": metrics,
         "strategy_resolved": strategy_name,
     }
+
+    if return_signals:
+        snap_factory = _FAMILY_SNAPSHOT_FNS.get(family)
+        snap = snap_factory(close, high, low, close_s, high_s, low_s, params) if snap_factory else None
+        cutoff_ms = now_ms - days * 86_400_000
+        signals_out: list[dict] = []
+        idx_long = np.where(sig_long)[0]
+        idx_short = np.where(sig_short)[0]
+        for i in idx_long:
+            i_int = int(i)
+            if int(ts[i_int]) < cutoff_ms:
+                continue
+            signals_out.append({
+                "ts_ms": int(ts[i_int]),
+                "side": "long",
+                "signal_price": round(float(close[i_int]), 6),
+                "indicators": snap(i_int) if snap else {},
+            })
+        for i in idx_short:
+            i_int = int(i)
+            if int(ts[i_int]) < cutoff_ms:
+                continue
+            signals_out.append({
+                "ts_ms": int(ts[i_int]),
+                "side": "short",
+                "signal_price": round(float(close[i_int]), 6),
+                "indicators": snap(i_int) if snap else {},
+            })
+        signals_out.sort(key=lambda s: s["ts_ms"])
+        result["signals"] = signals_out
+
+    return result
 
 
 # Register bb_stoch family (other families appended in later tasks)
@@ -557,6 +589,191 @@ def _signals_williams_r(close, high, low, close_s, high_s, low_s, params):
 
 
 _FAMILY_FNS["williams_r"] = _signals_williams_r
+
+
+# ── Snapshot helpers (for fidelity checker: return_signals=True) ──────────
+#
+# Each `_snapshot_<family>` rebuilds the indicator arrays for the strategy and
+# returns a closure `(i) -> dict` that emits the snapshot of indicators at
+# candle index i. Keys MUST match what the live strategy populates in
+# `indicators_json` (see bot/strategies/*.py) so the fidelity diff compares
+# the same field names.
+
+def _safe(arr, i):
+    if arr is None:
+        return None
+    try:
+        v = float(arr[i])
+    except (IndexError, TypeError, ValueError):
+        return None
+    import math
+    if math.isnan(v) or math.isinf(v):
+        return None
+    return round(v, 6)
+
+
+def _snapshot_bb_stoch(close, high, low, close_s, high_s, low_s, params):
+    bb_period = int(params["bb_period"])
+    bb_std = float(params["bb_std"])
+    stoch_k = int(params["stoch_k"])
+    stoch_d = int(params["stoch_d"])
+    ema_period = int(params.get("ema_period", 0))
+    BBP, BBM = _bb_arrays(close_s, close, bb_period, bb_std)
+    bb = ta.bbands(close_s, length=bb_period, std=bb_std)
+    BBU = bb[[c for c in bb.columns if c.startswith("BBU_")][0]].values.astype(float)
+    BBL = bb[[c for c in bb.columns if c.startswith("BBL_")][0]].values.astype(float)
+    K, D = _stoch_arrays(high_s, low_s, close_s, stoch_k, stoch_d)
+    ema = _ema(close_s, ema_period)
+
+    def snap(i):
+        return {"close": _safe(close, i),
+                "bbp": _safe(BBP, i), "bbm": _safe(BBM, i),
+                "bbu": _safe(BBU, i), "bbl": _safe(BBL, i),
+                "stoch_k": _safe(K, i), "stoch_d": _safe(D, i),
+                "ema": _safe(ema, i)}
+    return snap
+
+
+def _snapshot_bb_reversion(close, high, low, close_s, high_s, low_s, params):
+    bb_period = int(params["bb_period"])
+    bb_std = float(params["bb_std"])
+    ema_period = int(params.get("ema_period", 0))
+    BBP, BBM = _bb_arrays(close_s, close, bb_period, bb_std)
+    bb = ta.bbands(close_s, length=bb_period, std=bb_std)
+    BBU = bb[[c for c in bb.columns if c.startswith("BBU_")][0]].values.astype(float)
+    BBL = bb[[c for c in bb.columns if c.startswith("BBL_")][0]].values.astype(float)
+    ema = _ema(close_s, ema_period)
+    rsi = ta.rsi(close_s, length=14).values.astype(float)
+    BBP_prev = np.roll(BBP, 1); BBP_prev[0] = np.nan
+
+    def snap(i):
+        # Live uses bbp_prev as the trigger value, so we expose that.
+        return {"close": _safe(close, i),
+                "bbp": _safe(BBP_prev, i), "bbm": _safe(BBM, i),
+                "bbu": _safe(BBU, i), "bbl": _safe(BBL, i),
+                "rsi": _safe(rsi, i), "ema": _safe(ema, i)}
+    return snap
+
+
+def _snapshot_stoch_scalp(close, high, low, close_s, high_s, low_s, params):
+    stoch_k = int(params["stoch_k"])
+    stoch_d = int(params["stoch_d"])
+    ema_period = int(params.get("ema_period", 0))
+    K, D = _stoch_arrays(high_s, low_s, close_s, stoch_k, stoch_d)
+    ema = _ema(close_s, ema_period)
+    pK = np.roll(K, 1); pK[0] = np.nan
+    pD = np.roll(D, 1); pD[0] = np.nan
+
+    def snap(i):
+        return {"close": _safe(close, i),
+                "stoch_k": _safe(K, i), "stoch_d": _safe(D, i),
+                "stoch_k_prev": _safe(pK, i), "stoch_d_prev": _safe(pD, i),
+                "ema": _safe(ema, i)}
+    return snap
+
+
+def _snapshot_ema_cross(close, high, low, close_s, high_s, low_s, params):
+    ema_fast = int(params["ema_fast"])
+    ema_slow = int(params["ema_slow"])
+    ema_trend = int(params.get("ema_trend", 0))
+    use_atr_sl = str(params.get("use_atr_sl", False)).lower() not in ("false", "0", "no")
+    atr_period = int(params.get("atr_period", 14))
+    FAST = _ema(close_s, ema_fast)
+    SLOW = _ema(close_s, ema_slow)
+    TREND = _ema(close_s, ema_trend) if ema_trend > 0 else None
+    pFAST = np.roll(FAST, 1); pFAST[0] = np.nan
+    pSLOW = np.roll(SLOW, 1); pSLOW[0] = np.nan
+    atr = None
+    if use_atr_sl:
+        atr = ta.atr(high_s, low_s, close_s, length=atr_period).values.astype(float)
+
+    def snap(i):
+        return {"close": _safe(close, i),
+                "ema_fast": _safe(FAST, i), "ema_slow": _safe(SLOW, i),
+                "ema_fast_prev": _safe(pFAST, i), "ema_slow_prev": _safe(pSLOW, i),
+                "ema_trend": _safe(TREND, i),
+                "atr": _safe(atr, i)}
+    return snap
+
+
+def _snapshot_rsi_scalp(close, high, low, close_s, high_s, low_s, params):
+    rsi_period = int(params["rsi_period"])
+    ema_period = int(params.get("ema_period", 0))
+    RSI = ta.rsi(close_s, length=rsi_period).values.astype(float)
+    ema = _ema(close_s, ema_period)
+    pRSI = np.roll(RSI, 1); pRSI[0] = np.nan
+
+    def snap(i):
+        return {"close": _safe(close, i),
+                "rsi": _safe(RSI, i), "rsi_prev": _safe(pRSI, i),
+                "ema": _safe(ema, i)}
+    return snap
+
+
+def _snapshot_bb_rsi(close, high, low, close_s, high_s, low_s, params):
+    bb_period = int(params["bb_period"])
+    bb_std = float(params["bb_std"])
+    rsi_period = int(params["rsi_period"])
+    ema_period = int(params.get("ema_period", 0))
+    BBP, BBM = _bb_arrays(close_s, close, bb_period, bb_std)
+    bb = ta.bbands(close_s, length=bb_period, std=bb_std)
+    BBU = bb[[c for c in bb.columns if c.startswith("BBU_")][0]].values.astype(float)
+    BBL = bb[[c for c in bb.columns if c.startswith("BBL_")][0]].values.astype(float)
+    RSI = ta.rsi(close_s, length=rsi_period).values.astype(float)
+    ema = _ema(close_s, ema_period)
+
+    def snap(i):
+        return {"close": _safe(close, i),
+                "bbp": _safe(BBP, i), "bbu": _safe(BBU, i),
+                "bbl": _safe(BBL, i), "bbm": _safe(BBM, i),
+                "rsi": _safe(RSI, i), "ema": _safe(ema, i)}
+    return snap
+
+
+def _snapshot_macd_cross(close, high, low, close_s, high_s, low_s, params):
+    fast = int(params["macd_fast"])
+    slow = int(params["macd_slow"])
+    sig = int(params["macd_signal"])
+    ema_trend = int(params.get("ema_trend", 0))
+    df = ta.macd(close_s, fast=fast, slow=slow, signal=sig)
+    MACD = df[[c for c in df.columns if c.startswith("MACD_")][0]].values.astype(float)
+    SIG = df[[c for c in df.columns if c.startswith("MACDs_")][0]].values.astype(float)
+    trend = _ema(close_s, ema_trend) if ema_trend > 0 else None
+    pM = np.roll(MACD, 1); pM[0] = np.nan
+    pS = np.roll(SIG, 1); pS[0] = np.nan
+
+    def snap(i):
+        return {"close": _safe(close, i),
+                "macd": _safe(MACD, i), "macd_signal": _safe(SIG, i),
+                "macd_prev": _safe(pM, i), "macd_signal_prev": _safe(pS, i),
+                "ema_trend": _safe(trend, i)}
+    return snap
+
+
+def _snapshot_williams_r(close, high, low, close_s, high_s, low_s, params):
+    wr_period = int(params["wr_period"])
+    ema_period = int(params.get("ema_period", 0))
+    WR = ta.willr(high_s, low_s, close_s, length=wr_period).values.astype(float)
+    ema = _ema(close_s, ema_period)
+    pWR = np.roll(WR, 1); pWR[0] = np.nan
+
+    def snap(i):
+        return {"close": _safe(close, i),
+                "wr": _safe(WR, i), "wr_prev": _safe(pWR, i),
+                "ema": _safe(ema, i)}
+    return snap
+
+
+_FAMILY_SNAPSHOT_FNS: dict = {
+    "bb_stoch":     _snapshot_bb_stoch,
+    "bb_reversion": _snapshot_bb_reversion,
+    "stoch_scalp":  _snapshot_stoch_scalp,
+    "ema_cross":    _snapshot_ema_cross,
+    "rsi_scalp":    _snapshot_rsi_scalp,
+    "bb_rsi":       _snapshot_bb_rsi,
+    "macd_cross":   _snapshot_macd_cross,
+    "williams_r":   _snapshot_williams_r,
+}
 
 
 # ── Simulation ─────────────────────────────────────────────────────────────
