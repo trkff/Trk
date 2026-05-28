@@ -59,8 +59,8 @@
         <div class="fid-row">Preço &nbsp; <b>${pricePct.toFixed(0)}%</b> dentro tol (${run.price_drift} drift)</div>
         <div class="fid-row">Indicadores &nbsp; <b>${indPct.toFixed(0)}%</b> dentro tol (${run.indicator_drift} drift)</div>
         <hr>
-        <div class="fid-row">Live &nbsp; WR ${((lm.win_rate || 0) * 100).toFixed(0)}% · PF ${(lm.profit_factor || 0).toFixed(2)} · ROI ${((lm.roi || 0) * 100).toFixed(2)}%</div>
-        <div class="fid-row">BT &nbsp;&nbsp; WR ${((bm.win_rate || 0) * 100).toFixed(0)}% · PF ${(bm.profit_factor || 0).toFixed(2)} · ROI ${((bm.roi || 0) * 100).toFixed(2)}%</div>
+        <div class="fid-row">Live &nbsp; WR ${(lm.win_rate || 0).toFixed(1)}% · PF ${(lm.profit_factor || 0).toFixed(2)} · ROI ${(lm.roi || 0).toFixed(2)}%</div>
+        <div class="fid-row">BT &nbsp;&nbsp; WR ${(bm.win_rate || 0).toFixed(1)}% · PF ${(bm.profit_factor || 0).toFixed(2)} · ROI ${(bm.roi || 0).toFixed(2)}%</div>
       </div>`;
   }
 

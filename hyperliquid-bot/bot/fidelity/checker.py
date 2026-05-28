@@ -94,7 +94,10 @@ def diff_signals(live_signals: list[dict], bt_signals: list[dict],
 
         lp = float(l.get("signal_price") or 0)
         bp = float(b.get("signal_price") or 0)
-        if bp > 0:
+        # Only compare prices when BOTH sides have a real value. Legacy live
+        # signals emitted before the indicators_json migration have no price
+        # — they'd false-positive as 100% drift against any bt close.
+        if bp > 0 and lp > 0:
             pd_rel = _rel(lp, bp)
             if pd_rel > price_tol:
                 out["price_drift"] += 1
