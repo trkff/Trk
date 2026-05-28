@@ -22,8 +22,11 @@ def test_union_assets_combines_running_profiles(fresh_db, monkeypatch):
     import main as bot_main
 
     pid2 = fresh_db.create_profile(name="P2", exchange="lighter", credentials={})
-    fresh_db.set_profile_config(1, "assets", json.dumps(["BTC"]))
-    fresh_db.set_profile_config(pid2, "assets", json.dumps(["ETH", "SOL"]))
+    # Asset universe é dirigido pelas estratégias enabled — habilita BTC em
+    # profile 1 e ETH+SOL em profile 2 via instâncias hardcoded.
+    fresh_db.set_strategy_config("bb_stoch_btc_5m", True, {}, profile_id=1)
+    fresh_db.set_strategy_config("bb_stoch_eth_5m", True, {}, profile_id=pid2)
+    fresh_db.set_strategy_config("bb_stoch_sol_5m", True, {}, profile_id=pid2)
     # _union_assets filters by status in (running, starting) — set both running
     fresh_db.set_profile_config(1, "bot_status", "running")
     fresh_db.set_profile_config(pid2, "bot_status", "running")
@@ -41,8 +44,8 @@ def test_union_assets_combines_running_profiles(fresh_db, monkeypatch):
         with bot_main._bot_lock:
             bot_main._bot_threads.update(threads)
         assets = bot_main._union_assets()
-        # `get_active_assets` extends the per-profile asset list with strategy
-        # assets — for an empty profile that returns the same list.
+        # Universo é a união dos assets pinned pelas estratégias enabled em
+        # cada perfil running (não há mais lista global monitored_assets).
         assert "BTC" in assets
         assert "ETH" in assets
         assert "SOL" in assets
@@ -58,8 +61,10 @@ def test_on_candle_close_dispatches_only_to_running_profiles(fresh_db, monkeypat
     import main as bot_main
 
     pid2 = fresh_db.create_profile(name="P2", exchange="lighter", credentials={})
-    fresh_db.set_profile_config(1, "assets", json.dumps(["BTC"]))
-    fresh_db.set_profile_config(pid2, "assets", json.dumps(["BTC", "ETH"]))
+    # Profile 1: só BTC (uma instância pinned). Profile 2: BTC e ETH.
+    fresh_db.set_strategy_config("bb_stoch_btc_5m", True, {}, profile_id=1)
+    fresh_db.set_strategy_config("bb_stoch_btc_5m", True, {}, profile_id=pid2)
+    fresh_db.set_strategy_config("bb_stoch_eth_5m", True, {}, profile_id=pid2)
     fresh_db.set_profile_config(1, "bot_status", "running")
     fresh_db.set_profile_config(pid2, "bot_status", "running")
 

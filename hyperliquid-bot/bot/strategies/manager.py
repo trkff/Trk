@@ -405,9 +405,15 @@ def _load_dynamic_strategies():
 _load_dynamic_strategies()
 
 
-def get_active_assets(global_assets: list[str], profile_id: int = 1) -> list[str]:
+def get_active_assets(profile_id: int = 1) -> list[str]:
     """Union of assets across strategies enabled on this profile.
-    A strategy with empty assets falls back to the global list.
+
+    Asset universe is driven EXCLUSIVELY by enabled strategies — habilitar
+    uma estratégia pra CRCL faz o bot monitorar CRCL, nada mais. Não existe
+    mais a lista global `monitored_assets` (que tinha o footgun de monitorar
+    BTC/ETH/SOL por padrão mesmo sem estratégia usando — e pior: NÃO
+    monitorar assets de estratégias enabled quando o admin esquecia de
+    incluir na lista).
     """
     result: set[str] = set()
     for s in REGISTERED_STRATEGIES:
@@ -415,9 +421,9 @@ def get_active_assets(global_assets: list[str], profile_id: int = 1) -> list[str
         if not scfg["enabled"]:
             continue
         params = {**s.DEFAULT_PARAMS, **scfg["params"]}
-        strategy_assets = params.get("assets") or global_assets
-        result.update(strategy_assets)
-    return sorted(result) if result else list(global_assets)
+        for a in (params.get("assets") or []):
+            result.add(a)
+    return sorted(result)
 
 
 def get_required_timeframes(profile_id: int = 1) -> list[str]:

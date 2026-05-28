@@ -68,10 +68,6 @@
         <span id="net-label">Testnet</span>
       </div>
     </div>
-    <div class="config-field">
-      <label for="cfg-assets">Ativos Monitorados (separar por v&iacute;rgula)</label>
-      <input type="text" id="cfg-assets" placeholder="BTC,ETH,SOL">
-    </div>
   </div>
 </div>
 
@@ -159,7 +155,6 @@ const fieldMap = {
   'cfg-secret': 'secret_key',
   'cfg-lighter-wallet': 'lighter_wallet_address',
   'cfg-lighter-pubkey': 'lighter_public_key',
-  'cfg-assets': 'monitored_assets',
   'cfg-sizing-mode': 'sizing_mode',
   'cfg-risk-pct': 'risk_pct_per_trade',
   'cfg-fixed-size': 'fixed_trade_size_usd',
@@ -182,12 +177,7 @@ async function loadConfig() {
   for (const [elId, cfgKey] of Object.entries(fieldMap)) {
     const el = document.getElementById(elId);
     if (!el) continue;
-    if (cfgKey === 'monitored_assets') {
-      try { el.value = JSON.parse(cfg[cfgKey] || '[]').join(','); }
-      catch { el.value = cfg[cfgKey] || ''; }
-    } else {
-      el.value = cfg[cfgKey] || '';
-    }
+    el.value = cfg[cfgKey] || '';
   }
 
   document.getElementById('cfg-testnet').checked = (cfg.use_testnet || 'true') === 'true';
@@ -213,12 +203,7 @@ async function saveConfig() {
   for (const [elId, cfgKey] of Object.entries(fieldMap)) {
     const el = document.getElementById(elId);
     if (!el) continue;
-    if (cfgKey === 'monitored_assets') {
-      const arr = el.value.split(',').map(s => s.trim()).filter(Boolean);
-      data[cfgKey] = JSON.stringify(arr);
-    } else {
-      data[cfgKey] = el.value;
-    }
+    data[cfgKey] = el.value;
   }
   data.use_testnet = document.getElementById('cfg-testnet').checked ? 'true' : 'false';
   data.debug_logging = document.getElementById('cfg-debug').checked ? 'true' : 'false';

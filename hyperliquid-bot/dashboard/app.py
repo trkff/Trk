@@ -794,7 +794,7 @@ def create_app():
         # Split: per-profile keys go to profile.<active>.<key>, the rest to
         # the global namespace (selected_exchange, debug_logging, credentials,
         # fee_rate_round_trip, etc.). This is what makes changing slippage /
-        # max_positions / monitored_assets on Conta A leave Conta B untouched.
+        # max_positions / slippage on Conta A leave Conta B untouched.
         profile_payload = {k: v for k, v in data.items()
                            if k in db._PER_PROFILE_CFG_KEYS}
         global_payload = {k: v for k, v in data.items()

@@ -101,21 +101,11 @@ def _union_assets() -> list[str]:
     seen: set[str] = set()
     pids = _subscribed_profile_ids()
     for pid in pids:
-        # 1. Profile-scoped global assets list (config UI). Reads
-        # `profile.<pid>.monitored_assets` first (current config save key) with
-        # fallback to `profile.<pid>.assets` (legacy M8 namespaced key) and
-        # finally the global `monitored_assets` for pre-multi-profile installs.
-        raw = (db.get_profile_config(pid, "monitored_assets")
-               or db.get_profile_config(pid, "assets")
-               or db.get_config("monitored_assets")
-               or "[]")
+        # Asset universe é exclusivamente o conjunto pinned pelas estratégias
+        # enabled deste perfil. Sem fallback pra lista global `monitored_assets`
+        # (removida — universo agora é 100% dirigido por estratégia).
         try:
-            seen.update(json.loads(raw))
-        except json.JSONDecodeError:
-            pass
-        # 2. Plus any assets pinned by the profile's enabled strategies
-        try:
-            seen.update(get_active_assets(list(seen), profile_id=pid))
+            seen.update(get_active_assets(profile_id=pid))
         except Exception:
             log.exception("union_assets: failed to read strategies for profile %s", pid)
     return sorted(seen)
@@ -262,7 +252,7 @@ def _refresh_candle_manager_assets():
 
 def _build_cfg_for_profile(profile_id: int) -> dict:
     """Per-profile cfg dict — globals merged with this profile's overrides
-    for risk/sizing/slippage/monitored_assets/etc. Consumed by process_asset
+    for risk/sizing/slippage/etc. Consumed by process_asset
     → evaluate_all → executor.open_position; each one reads flat top-level
     keys like cfg["max_positions"] / cfg["slippage"] etc."""
     return db.get_effective_config(profile_id)
@@ -298,15 +288,9 @@ def _on_candle_close_dispatch(asset: str, interval: str):
         if client is None:
             return
         cfg = _build_cfg_for_profile(pid)
-        # Profile filter: only act if this asset is in the profile's universe.
-        try:
-            assets_raw = (db.get_profile_config(pid, "monitored_assets")
-                          or db.get_profile_config(pid, "assets")
-                          or cfg.get("monitored_assets", "[]"))
-            profile_assets = json.loads(assets_raw)
-        except json.JSONDecodeError:
-            profile_assets = []
-        active_assets = set(get_active_assets(profile_assets, profile_id=pid))
+        # Profile filter: only act if this asset is in the profile's universe
+        # (= union dos assets das estratégias enabled neste perfil).
+        active_assets = set(get_active_assets(profile_id=pid))
         if asset not in active_assets:
             return
         try:
@@ -392,12 +376,7 @@ def bot_loop(profile_id: int = 1):
     db.set_profile_config(profile_id, "bot_status", "running")
 
     cfg = db.get_all_config()
-    assets_raw = cfg.get("monitored_assets", '["BTC","ETH","SOL"]')
-    try:
-        global_assets = json.loads(assets_raw)
-    except json.JSONDecodeError:
-        global_assets = ["BTC", "ETH", "SOL"]
-    initial_assets = get_active_assets(global_assets, profile_id=profile_id)
+    initial_assets = get_active_assets(profile_id=profile_id)
 
     # Timestamps for 15m/30m/1h/4h/1d candle close detection.
     # Persistidos em SQLite (config table com prefix `last_ts.<tf>.<asset>`)
@@ -445,12 +424,7 @@ def bot_loop(profile_id: int = 1):
 
             # Check if this profile's asset list changed; refresh the shared candle
             # manager so the union covers the new assets.
-            assets_raw = cfg.get("monitored_assets", '["BTC","ETH","SOL"]')
-            try:
-                global_assets = json.loads(assets_raw)
-            except json.JSONDecodeError:
-                global_assets = ["BTC", "ETH", "SOL"]
-            current_assets = set(get_active_assets(global_assets, profile_id=profile_id))
+            current_assets = set(get_active_assets(profile_id=profile_id))
             if current_assets != _last_asset_set:
                 log.info(f"[profile {profile_id}] Asset list changed -> {sorted(current_assets)}")
                 _last_asset_set = current_assets

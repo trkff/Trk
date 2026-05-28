@@ -621,7 +621,6 @@ DEFAULT_CONFIG = {
     "lighter_public_key": "",
     "lighter_private_key": "",
     "use_testnet": "true",
-    "monitored_assets": '["BTC","ETH","SOL"]',
     "risk_pct_per_trade": "1.0",
     "max_positions": "2",
     "max_daily_loss_pct": "5.0",
@@ -681,12 +680,15 @@ def set_configs(kvs: dict):
 # global default) — callers that need a default should handle it explicitly.
 
 # Config keys que vivem POR PERFIL (cada perfil tem seu próprio valor de risk,
-# sizing, slippage, monitored_assets, etc.). As outras keys (selected_exchange,
-# debug_logging, fee_rate_round_trip, _migration_*, flask.secret_key) ficam
-# globais. Quando o usuário salva pela página /config, as keys per-profile vão
-# pra `profile.<id>.<key>` e o resto pro namespace global.
+# sizing, slippage, etc.). As outras keys (selected_exchange, debug_logging,
+# fee_rate_round_trip, _migration_*, flask.secret_key) ficam globais. Quando o
+# usuário salva pela página /config, as keys per-profile vão pra
+# `profile.<id>.<key>` e o resto pro namespace global.
+#
+# `monitored_assets` foi removido — universo do bot agora é dirigido
+# exclusivamente pelas estratégias enabled (via get_active_assets). Habilita a
+# estratégia pra X asset e pronto, o bot monitora.
 _PER_PROFILE_CFG_KEYS = frozenset({
-    "monitored_assets",
     "max_positions",
     "max_daily_loss_pct",
     "sizing_mode",
