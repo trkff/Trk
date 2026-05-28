@@ -1,7 +1,58 @@
 {% extends "base.html" %}
 {% block content %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/fidelity.css') }}">
+
 <div class="fidelity-page">
-  <h1>Fidelidade da Estratégia</h1>
-  <div id="fidelity-app">Loading...</div>
+  <header class="fidelity-header">
+    <h1>Fidelidade da Estrat&eacute;gia</h1>
+    <p class="muted">Compara o live vs o backtest can&ocirc;nico no mesmo per&iacute;odo.</p>
+  </header>
+
+  <section class="fidelity-form">
+    <label>Estrat&eacute;gia
+      <select id="fid-strategy"></select>
+    </label>
+    <label>Per&iacute;odo
+      <select id="fid-days">
+        <option value="1">D-1</option>
+        <option value="7" selected>7 dias</option>
+        <option value="30">30 dias</option>
+      </select>
+    </label>
+    <button id="fid-run" class="btn btn-primary">&#9654; Verificar fidelidade</button>
+    <label>Hist&oacute;rico
+      <select id="fid-history"><option value="">&mdash; &uacute;ltimas verifica&ccedil;&otilde;es &mdash;</option></select>
+    </label>
+    <div id="fid-progress" class="fid-progress hidden"></div>
+  </section>
+
+  <section id="fid-cards" class="fidelity-cards"></section>
+
+  <section id="fid-drilldown" class="fidelity-drilldown hidden">
+    <div class="fid-tabs">
+      <button class="fid-tab active" data-layer="signal">Sinais (<span data-count="signal">0</span>)</button>
+      <button class="fid-tab" data-layer="trade">Trades (<span data-count="trade">0</span>)</button>
+      <button class="fid-tab" data-layer="metric">M&eacute;tricas (<span data-count="metric">0</span>)</button>
+    </div>
+    <div class="fid-filters" id="fid-filters"></div>
+    <table class="fid-diff-table">
+      <thead><tr id="fid-diff-head"></tr></thead>
+      <tbody id="fid-diff-body"></tbody>
+    </table>
+  </section>
+
+  <div id="fid-modal" class="fid-modal hidden">
+    <div class="fid-modal-card">
+      <button class="fid-modal-close">&times;</button>
+      <h2 id="fid-modal-title">Detalhes</h2>
+      <div class="fid-modal-grid">
+        <div><h3>Live</h3><pre id="fid-modal-live"></pre></div>
+        <div><h3>Backtest</h3><pre id="fid-modal-bt"></pre></div>
+      </div>
+      <p id="fid-modal-cause" class="fid-cause"></p>
+    </div>
+  </div>
 </div>
+
+<script src="{{ url_for('static', filename='js/fidelity.js') }}"></script>
 {% endblock %}

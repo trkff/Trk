@@ -1,0 +1,43 @@
+.fidelity-page { padding: 1.5rem; color: #e2e8f0; }
+.fidelity-header h1 { margin-bottom: 0.25rem; }
+.fidelity-header .muted { color: #94a3b8; }
+.fidelity-form { display: flex; gap: 1rem; align-items: end; margin: 1rem 0; flex-wrap: wrap; }
+.fidelity-form label { display: flex; flex-direction: column; font-size: 0.85rem; color: #94a3b8; gap: 0.25rem; }
+.fidelity-form select { background: #1e293b; color: #e2e8f0; border: 1px solid #334155; padding: 0.4rem 0.6rem; border-radius: 4px; }
+.btn-primary { background: #2563eb; color: #fff; padding: 0.5rem 1rem; border: none; border-radius: 4px; cursor: pointer; }
+.btn-primary:hover { background: #1d4ed8; }
+.fid-progress { padding: 0.5rem 0.8rem; background: #1e293b; border-radius: 4px; color: #cbd5e1; font-size: 0.85rem; }
+.hidden { display: none !important; }
+
+.fidelity-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 1rem; margin-top: 1.5rem; }
+.fid-card { background: #1e293b; border-radius: 8px; padding: 1rem; border-left: 4px solid #475569; cursor: pointer; transition: transform 0.1s; }
+.fid-card:hover { transform: translateY(-2px); }
+.fid-card.fid-green { border-left-color: #10b981; }
+.fid-card.fid-yellow { border-left-color: #f59e0b; }
+.fid-card.fid-red { border-left-color: #ef4444; }
+.fid-card header { display: flex; justify-content: space-between; font-weight: 600; align-items: baseline; }
+.fid-card .fid-score em { color: #94a3b8; font-style: normal; font-weight: 400; font-size: 0.85rem; }
+.fid-card hr { border: none; border-top: 1px solid #334155; margin: 0.5rem 0; }
+.fid-card .fid-row { font-size: 0.85rem; color: #cbd5e1; margin: 0.2rem 0; }
+
+.fidelity-drilldown { margin-top: 2rem; background: #1e293b; padding: 1rem; border-radius: 8px; }
+.fid-tabs { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
+.fid-tab { background: #0f172a; color: #94a3b8; border: 1px solid #334155; padding: 0.4rem 0.9rem; border-radius: 4px; cursor: pointer; }
+.fid-tab.active { background: #2563eb; color: #fff; border-color: #2563eb; }
+.fid-filters { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-bottom: 0.75rem; }
+.fid-chip { background: #0f172a; color: #cbd5e1; border: 1px solid #334155; padding: 0.25rem 0.6rem; border-radius: 999px; font-size: 0.8rem; cursor: pointer; }
+.fid-chip.active { background: #334155; color: #fff; border-color: #475569; }
+.fid-chip:hover { background: #334155; }
+
+.fid-diff-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+.fid-diff-table th, .fid-diff-table td { padding: 0.4rem 0.6rem; border-bottom: 1px solid #334155; text-align: left; }
+.fid-diff-table th { color: #94a3b8; font-weight: 600; }
+.fid-diff-table tbody tr:hover { background: #334155; cursor: pointer; }
+
+.fid-modal { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 100; }
+.fid-modal-card { background: #1e293b; padding: 1.5rem; border-radius: 8px; max-width: 900px; width: 90%; max-height: 80vh; overflow: auto; position: relative; }
+.fid-modal-close { position: absolute; top: 0.5rem; right: 0.8rem; background: none; color: #cbd5e1; border: none; font-size: 1.5rem; cursor: pointer; }
+.fid-modal-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 0.5rem; }
+.fid-modal-grid h3 { color: #94a3b8; font-size: 0.85rem; margin-bottom: 0.4rem; }
+.fid-modal-grid pre { background: #0f172a; padding: 0.75rem; border-radius: 4px; max-height: 400px; overflow: auto; font-size: 0.78rem; }
+.fid-cause { background: #0f172a; padding: 0.6rem 0.8rem; border-radius: 4px; color: #fbbf24; margin-top: 1rem; font-size: 0.9rem; }
