@@ -48,8 +48,32 @@ def compute_metrics(trades: list[dict], initial_capital: float = 1000.0) -> dict
             "cumulative_pnl": [],
         }
 
-    wins = sum(1 for t in trades if t.get("outcome") == "tp" or (t.get("outcome") == "bb_mid" and t.get("pnl", 0) > 0))
-    losses = sum(1 for t in trades if t.get("outcome") == "sl" or (t.get("outcome") == "bb_mid" and t.get("pnl", 0) <= 0))
+    # Live trades têm pnl mas NÃO têm coluna `outcome` (essa só existe no
+    # backtest engine). Pra fechar WR corretamente em ambos os caminhos:
+    # se outcome existe usa ele; caso contrário usa o sinal de pnl.
+    def _is_win(t):
+        o = t.get("outcome")
+        if o == "tp":
+            return True
+        if o == "sl":
+            return False
+        if o == "bb_mid":
+            return t.get("pnl", 0) > 0
+        # Live trade: sem outcome — classifica pelo pnl
+        return t.get("pnl", 0) > 0
+
+    def _is_loss(t):
+        o = t.get("outcome")
+        if o == "sl":
+            return True
+        if o == "tp":
+            return False
+        if o == "bb_mid":
+            return t.get("pnl", 0) <= 0
+        return t.get("pnl", 0) <= 0
+
+    wins = sum(1 for t in trades if _is_win(t))
+    losses = sum(1 for t in trades if _is_loss(t))
     timeouts = sum(1 for t in trades if t.get("outcome") == "timeout")
     total = len(trades)
 
