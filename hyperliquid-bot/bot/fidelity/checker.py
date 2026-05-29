@@ -542,13 +542,25 @@ def run_check(strategy: str, asset: str, days: int,
         if int(s["ts_ms"]) + tf_ms >= period_start_ms
     ]
     bt_trades_raw = bt_result.get("trades", [])
+    # Filtra raw_trades também pelo period_start (mesmo critério dos signals
+    # + dos normalized trades abaixo). Sem isso, bt_metrics ficava com TODOS
+    # os trades de 14d enquanto bt_trades só os do período clamped — comparação
+    # `total_pnl` Live vs BT virava 14d-de-BT vs 2d-de-Live, gap artificialmente
+    # enorme. Caso real: williams_r_brentoil 14d=85 trades de BT mas só 9
+    # depois do live ativar; bt_metrics mostrava +9.91% ROI quando o ROI real
+    # do período comparável era ~+1%.
+    from datetime import datetime, timezone as _tz
+    clamp_iso = datetime.fromtimestamp(period_start_ms / 1000, tz=_tz.utc).isoformat()
+    bt_trades_raw = [t for t in bt_trades_raw if t.get("entry_time", "") >= clamp_iso]
     bt_trades = []
     for t in bt_trades_raw:
         nt = _normalize_bt_trade(t)
         nt["entry_ts_ms"] += tf_ms
         if nt["entry_ts_ms"] >= period_start_ms:
             bt_trades.append(nt)
-    bt_metrics = bt_result.get("metrics", {})
+    # Recompute metrics from the clamped trade list — bt_result["metrics"] was
+    # based on the full 14d backtest.
+    bt_metrics = compute_metrics(bt_trades_raw, initial_capital=trade_size_usd)
 
     # Drop bt_signals that fall INSIDE an already-active bt trade (entry
     # exclusivo, exit inclusivo). O engine retorna toda candle com
